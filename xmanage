@@ -678,6 +678,130 @@ else
 fi 
 }
 
+function s_edit {
+local jsonenabled=${1}
+local client=${2}
+local body=${3}
+if server_exists "$body"; then
+  server=$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  inf=$(echo "$server" | jq -r '.server_name + " " + .server_id + " " + (.cpu_limit|tostring) + " " + (.ram_limit|tostring) + " " + (.swap_limit|tostring) + " " + (.io_weight|tostring) + " " + .ports')
+  read server_name server_id cpu_limit ram_limit swap_limit io_weight ports <<< "${inf}"
+  server_service=${server_id}_${server_name}.service
+  startup=$(echo "$server" | jq -r '.startup')
+  if ! "${jsonenabled:=false}"; then
+  PS3="Select entry to edit: "
+server=$(jq -rc '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")'  /etc/xmanage/services/.services)
+    inf=$(echo "$server" | jq -r '.server_name + " " + .server_id + " " + (.cpu_limit|tostring) + " " + (.ram_limit|tostring) + " " + (.swap_limit|tostring) + " " + (.disk_limit|tostring) + " " + (.io_weight|tostring) + " " + .ports')
+    read server_name server_id cpu_limit ram_limit swap_limit disk_limit io_weight ports <<< "${inf}"
+    startup=$(echo "$server" | jq -r '.startup')
+while true
+do
+select item in \
+"Name: ${server_name:=server}" \
+"CPU limit: ${cpu_limit/null/unlimited}%" \
+"RAM limit: ${ram_limit/null/unlimited}MB" \
+"Swap limit: ${swap_limit/null/unlimited}MB" \
+"I/O priority: ${io_weight:=Unknown}" \
+"Allowed ports: ${ports:=Unknown}" \
+"Startup command: $startup" \
+"Save and exit" \
+"Exit"
+do
+  case $item in
+  Name:*)
+    printf '\e[A\e[K'
+    echo -n "Enter new name: "
+    read -r server_name 
+    break 
+  ;;
+  CPU*)
+    printf '\e[A\e[K'
+    echo -n "Enter new CPU limit (without %): "
+    read -r cpu_limit
+    [ -z "$cpu_limit" ] cpu_limit=infinity
+    printf '\e[A\e[K'
+    break 
+  ;;
+  RAM*)
+    printf '\e[A\e[K'
+    echo -n "Enter new RAM limit (M/G/T): "
+    read ram_limit
+    ram_limit=$(echo "${ram_limit:=infinity}" | to_mb)
+    break 
+  ;;
+  Swap*)
+    printf '\e[A\e[K'
+    echo -n "Enter new swap limit (M/G/T): "
+    read swap_limit
+    swap_limit=$(echo "${swap_limit:=infinity}" | to_mb)
+    break 
+  ;;
+  I\/O*)
+    printf '\e[A\e[K'
+    echo -n "Enter new I/O priority: "
+    read io_weight
+    break 
+  ;;
+  Allowed*)
+    printf '\e[A\e[K'
+    echo -n "Enter new port allocation: "
+    read ports
+    break 
+  ;;
+   Startup*)
+    printf '\e[A\e[K'
+    echo -n "Enter new startup command: "
+    read startup
+    break 
+  ;;
+  "Save and exit")
+
+   sed -e 's/Description=.*/Description='"${server_name}"'/' \
+     -e 's/CPUQuota=.*/CPUQuota='"$([ ! -z "$cpu_limit" ] && echo "${cpu_limit}%" || echo "infinity")"'/' \
+     -e 's/MemoryMax=.*/MemoryMax='"$([ ! -z "$ram_limit" ] && echo "${ram_limit}M" || echo "infinity")"'/' \
+     -e 's/IOWeight=.*/IOWeight='"${io_weight:=500}"'/' \
+     -e 's/MemorySwapMax=.*/MemorySwapMax='"$([ ! -z "$swap_limit" ] && echo "${swap_limit}M" || echo "infinity")"'/' \
+     -e 's/SocketBindAllow='"$(echo $server | jq -r '.ports')"'/SocketBindAllow='"${ports}"'/' \
+     -e 's/ExecStart=.*/ExecStart='"${startup}"'/' \
+     /etc/systemd/system/${server_service}
+ # mv -n /etc/xmanage/services/${server_service} /etc/xmanage/services/${server_id}_${server_name}.service
+  #rm /etc/systemd/system/${server_service} 
+  #ln -s /etc/xmanage/services/${server_id}_${server_name}.service /etc/systemd/system/${server_id}_${server_name}.service
+  op1=$(jq -c '(.[] | select(.server_id=="'"${server_id}"'")).server_name |= "'"$server_name"'" | (.[] | select(.server_id=="'"${server_id}"'")).cpu_limit |= '"${cpu_limit:=null}"' | (.[] | select(.server_id=="'"${server_id}"'")).ram_limit |= '"${ram_limit:=null}"' | (.[] | select(.server_id=="'"${server_id}"'")).swap_limit |= '"${swap_limit:=null}"' | (.[] | select(.server_id=="'"${server_id}"'")).io_weight |= '"${io_weight:=500}"' | (.[] | select(.server_id=="'"${server_id}"'")).ports |= "'"${ports}"'" | (.[] | select(.server_id=="'"${server_id}"'")).startup |= "'"${startup}"'"' /etc/xmanage/services/.services)
+  echo "$op1" 
+ # jq -c '. |= [ '"$op1"' ]' /etc/xmanage/services/.services
+  #> /etc/xmanage/services/.services
+  systemctl daemon-reload
+;;
+  Exit|*)
+  echo "Exiting..."
+  exit 
+  break
+  esac
+done
+printf '\e[A\e[K'
+printf '\e[A\e[K'
+printf '\e[A\e[K'
+done
+else 
+  if [ ! -f /etc/xmanage/services/${server_service} && ! -f /etc/xmanage/services/${server_service} ]; then show_500; fi
+  if [[ "$(echo "$body" | jq '. | has("server_name")')" = "false" ]]; then missing+=",server_name"; else name=$(echo "$body" | jq -r '.server_name'); fi
+  if [[ "$(echo "$body" | jq '. | has("cpu_limit")')" = "false" ]]; then  missing+=",cpu_limit"; else cpulimit=$(echo "$body" | jq -r '.cpu_limit'); fi
+  if [[ "$(echo "$body" | jq '. | has("ram_limit")')" = "false" ]]; then  missing+=",ram_limit"; else ramlimit=$(echo "$body" | jq -r '.ram_limit'); fi
+  if [[ "$(echo "$body" | jq '. | has("swap_limit")')" = "false" ]]; then  missing+=",swap_limit"; else swaplimit=$(echo "$body" | jq -r '.swap_limit'); fi
+  #if [[ "$(echo "$body" | jq '. | has("disk_limit")')" = "false" ]]; then missing+=",disk_limit"; else disklimit=$(echo "$body" | jq -r '.disk_limit'); fi
+  if [[ "$(echo "$body" | jq '. | has("io_weight")')" = "false" ]]; then missing+=",io_weight"; else ioweight=$(echo "$body" | jq -r '.io_weight'); fi
+  if [[ "$(echo "$body" | jq '. | has("ports")')" = "false" ]]; then missing+=",ports"; else ports=$(echo "$body" | jq -r '.ports'); fi
+  if [[ "$(echo "$body" | jq '. | has("startup")')" = "false" ]]; then missing+=",startup"; else startup=$(echo "$body" | jq -r '.startup'); fi
+fi
+fi
+
+
+}
+
+# fallocate -l ${disklimit} /etc/xmanage/volumes/${server_id}.partition
+# losetup -c $(df -h | grep ${server_id} | awk '{print $1}' ) > /dev/null
+# sudo resize2fs $(df -h | grep ${server_id} | awk '{print $1}' ) > /dev/null
 function prompt {
    [ ! -z "$1" ] && p1=$1
    [ ! -z "$2" ] && p2=$2
@@ -1707,94 +1831,7 @@ fi
 systemctl status ${server_service}
 ;;
 edit)
-server=$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services)
-server_id=$(echo "$server" | jq -r '.server_id')
-server_name=$(echo "$server" | jq -r '.server_name')
-server_service=$(find /etc/systemd/system/ | grep -v default.target.wants | grep -m 1 $server_id | cut -c 21- )
-if [[ "$3" = "" ]]; then
-error "Server name/ID is missing"
-exit
-elif [[ "${server_name}" == "" && "${server_id}" = "" ]]; then
-error "Server name/ID was not found"
-exit
-fi
-case $4 in
-name)
-prompt "$(translate "Enter new server name:")" name 1
-sed -i 's/Description=.*/Description="'"${name}"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).server_name |= "'"${name}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's name"
-;;
-cpulimit)
-prompt "$(translate "Enter new CPU limit (without %):")" cpulimit 1
-sed -i 's/CPUQuota='"$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services | jq -r '.cpu_limit')"'/CPUQuota='"${cpulimit}%"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).cpu_limit |= "'"${cpulimit}"'%"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-systemctl daemon-reload
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's CPU limit"
-;;
-ramlimit)
-prompt "${color}[RAM]${NC} $(translate "Enter new RAM limit (M/G/T):")" ramlimit 1
-sed -i 's/MemoryMax='"$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services | jq -r '.ram_limit')"'/MemoryMax='"${ramlimit}"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).ram_limit |= "'"${ramlimit}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-systemctl daemon-reload
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's memory limit"
-;;
-swaplimit)
-prompt "${color}[Swap]${NC} $(translate "Enter new Swap memory limit (M/G/T):")" swaplimit 1
-sed -i 's/MemorySwapMax='"$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services | jq -r '.swap_limit')"'/MemorySwapMax='"${ramlimit}"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).swap_limit |= "'"${swaplimit}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-systemctl daemon-reload
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's swap memory limit"
-;;
-disklimit)
-prompt "${color}[Disk]${NC} $(translate "Enter new Disk limit (M/G/T):")" disklimit 1
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).disk_limit |= "'"${disklimit}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-fallocate -l ${disklimit} /etc/xmanage/volumes/${server_id}.partition
-losetup -c $(df -h | grep ${server_id} | awk '{print $1}' ) > /dev/null
-sudo resize2fs $(df -h | grep ${server_id} | awk '{print $1}' ) > /dev/null
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's disk size"
-;;
-ioweight)
-prompt "${color}[I/O Weight]${NC} $(translate "Enter new IO weight (e.g. 500):")" ioweight 1
-sed -i 's/IOWeight='"$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services | jq -r '.io_weight')"'/IOWeight='"${ioweight}"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).io_weight |= "'"${ioweight}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-systemctl daemon-reload
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's I/O weight"
-;;
-ports)
-prompt "${color}[Name]${NC} $(translate "Enter new port(s) (e.g. 1234 or 1234-1235):")" ports 1
-sed -i 's/SocketBindAllow='"$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services | jq -r '.ports')"'/SocketBindAllow='"${ports}"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).ports |= "'"${ports}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-systemctl daemon-reload
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's allowed ports"
-;;
-startup)
-prompt "${color}[Startup]${NC} $(translate "Enter new startup command:")" startup 1
-sed -i 's/ExecStart='"$(jq '.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")' /etc/xmanage/services/.services | jq -r '.startup')"'/ExecStart='"${startup}"'/' /etc/systemd/system/${server_service}
-op1=$(jq -c '(.[] | select(.server_id=="'"${argsall3}"'", .server_name=="'"${argsall3}"'")).startup |= "'"${startup}"'"' /etc/xmanage/services/.services)
-echo "${op1}" > /etc/xmanage/services/.services
-systemctl daemon-reload
-log "${done_message[${loc}]}"
-audit "${server_id}" "CLI has changed server's startup command"
-;;
-*)
-error "$(translate "Enter correct type and try again")"
-exit 1
-;;
+s_edit "${usejson:=false}" "CLI" "${argsall3}" 
 esac
 ;;
 list)
