@@ -769,6 +769,7 @@ do
   #ln -s /etc/xmanage/services/${server_id}_${server_name}.service /etc/systemd/system/${server_id}_${server_name}.service
   op1=$(jq -c '(.[] | select(.server_id=="'"${server_id}"'")).server_name |= "'"$server_name"'" | (.[] | select(.server_id=="'"${server_id}"'")).cpu_limit |= '"${cpu_limit:=null}"' | (.[] | select(.server_id=="'"${server_id}"'")).ram_limit |= '"${ram_limit:=null}"' | (.[] | select(.server_id=="'"${server_id}"'")).swap_limit |= '"${swap_limit:=null}"' | (.[] | select(.server_id=="'"${server_id}"'")).io_weight |= '"${io_weight:=500}"' | (.[] | select(.server_id=="'"${server_id}"'")).ports |= "'"${ports}"'" | (.[] | select(.server_id=="'"${server_id}"'")).startup |= "'"${startup}"'"' /etc/xmanage/services/.services)
   echo "$op1" 
+  
  # jq -c '. |= [ '"$op1"' ]' /etc/xmanage/services/.services
   #> /etc/xmanage/services/.services
   systemctl daemon-reload
