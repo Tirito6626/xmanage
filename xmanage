@@ -1111,7 +1111,7 @@ Server: xmanage\r
 Content-Type: application/json\r
 Accept: application/json\r
 
-${json}\r
+{ "status": "fail", "error": "Not found" }\r
 EOT
 );
 echo -e "$out" > /etc/xmanage/api/response
@@ -1533,22 +1533,22 @@ action=$(echo "$path" | sed "s|/servers/${whatever}||")
 case $action in
 "/status"|"/status/")
           output=$(s_status true "API" "${server_id}")
-        if "$(echo "$output" | jq '. | has("error")')"; then
-          error="$(echo "$output" | jq '.error')"
-          case "$error" in 
-          "Not found") show_404 ;;
-          esac
-        else
-        out=$(cat << EOF 
+#        if "$(echo "$output" | jq '. | has("error")')"; then
+#          error="$(echo "$output" | jq '.error')"
+#          case "$error" in 
+#          "Not found") show_404 ;;
+#          esac
+#        else
+        out=$(cat <<- EOF 
 HTTP/1.1 200\r
 Server: xmanage\r
 Content-Type: application/json\r
 Accept: application/json\r
 
-$output\r
+${output}\r
 EOF
 )
-        fi
+#        fi
 ;;
 "/files"|"/files/")
 serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatever}"'")' /etc/xmanage/services/.services)
@@ -1585,7 +1585,7 @@ HTTP/1.1 404\r
 Server: xmanage\r
 Content-Type: application/json\r
 
-{ "status": "failed", "error": "Not found" }
+{ "status": "failed", "error": "Not found" }\r
 EOT
 );
 fi
