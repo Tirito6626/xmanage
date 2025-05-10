@@ -504,6 +504,7 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
   if [[ "$body" != "api" ]]; then
   server="$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)"
   server_id=$(echo "$server" | jq -r '.server_id')
+  ports=$(echo "$server" | jq -r '.ports')
   fi 
   [[ "$body" = "api" ]] && server_service="xmanage-api" || server_service=$(find /etc/systemd/system/ | grep -v default.target.wants | grep -m 1 "$server_id" | cut -c 21- )
   systemdstatus=$(systemctl status $server_service)
@@ -530,19 +531,21 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
   membar="${gray}offline             ${NC}"
   cpubar="${gray}offline             ${NC}"
   [[ "$body" != "api" ]] && cpumax="$(echo "$server" | jq -r '.cpu_limit')" || cpumax=100
-  [[ "$body" != "api" ]] &&  memmax=$(echo "$server" | jq -r '.ram_limit') || memmax=128
+  [[ "$body" != "api" ]] && memmax=$(echo "$server" | jq -r '.ram_limit') || memmax=128
   [[ "$cpumax" = null ]] && cpumax="unlimited" || cpumax="${cpumax}%"
   if [[ "$state" != "inactive" && "$state" != "failed" ]]; then
-      pid=$(echo "$systemdstatus" | grep 'Main PID' | awk '{print $3}') || pid="undefined"
+      pid=$(echo "$systemdstatus" | grep 'Main PID' | awk '{print $3}')
       cpuusedpercent=$(ps -p $pid -o %cpu 2>/dev/null | tail -n1 | awk '{print int($1)}')
       memused=$(echo "$systemdstatus" | grep 'Memory' | awk '{print $2}' | to_mb)
       memusedpercent=$(echo ${memused} ${memmax} | awk '{print $1/$2 * 100.0}')
       uptime=$(echo "$systemdstatus" | grep -Po ".*; \K(.*)(?= ago)")
+      membar=$(bar $memusedpercent)
+      cpubar=$(bar $cpuusedpercent)
+      processtree=$(ps -e -o pid,unit,cmd --forest | grep -v 'session-*' | grep "${server_service}" | sed -e "s/${server_service}//g" -e 's/\\_/└─/g' -e 's/    //g')
+      boundports=$(netstat -tlp | grep "$(ps -e -o pid,unit,cmd | grep "${server_service}" | awk '{ print $1 }')" | awk '{ if ($4 ~ /[0-9]\.[0-9]/) { print $4 " (IPv4)" } else { print $4 " (IPv6)" } }' | sed 's/.*://')
   fi
   if ! "$jsonenabled"; then  
-    membar=$(bar $memusedpercent)
-    cpubar=$(bar $cpuusedpercent)
-    processtree=$(ps -e -o pid,unit,cmd --forest | grep -v 'session-*' | grep "${server_service}" | sed -e "s/${server_service}//g" -e 's/\\_/└─/g' -e 's/    //g')
+    
     echo -e "${color}State${NC}         $state1${NC} (${uptime})"
     echo -e "${color}RAM ${NC}          [${memused:=0}M/${memmax}M]"
     echo -e "              [${color}${membar}${NC}]"
@@ -550,12 +553,13 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
     echo -e "              [${color}$cpubar${NC}]"
     [[ "$body" != "api" ]] && echo -e "${color}Disk${NC}          [${diskused}M/${diskmax}M]"   
     [[ "$body" != "api" ]] && echo -e "              [${color}${diskbar}${NC}]"   
+    echo -e "Bound ports:\n${boundports/\n/, /}"
     "$noptree" || echo "Process tree:"         
-    "$noptree" || echo "$processtree"
+    "$noptree" || echo "${processtree//\.service}"
     "$nologs"  || echo "$output"
   else
   cpumax=${cpumax//%}
-  json='{ "status": "success", "data": { "server_id": "'"$server_id"'", "server_name": "'"$server_name"'", "state": "'"$state"'", "uptime": "'"${uptime}"'", "ram_used": '"${memused:=0}"', "ram_total": '"${memmax:=null}"', "cpu_used": '"${cpuusedpercent:=0}"', "cpu_total": '"${cpumax:=null}"', "disk_used": '"${diskused:=0}"', "disk_total": '"${diskmax:=null}"' }}'
+  json='{ "status": "success", "data": { "server_id": "'"$server_id"'", "server_name": "'"$server_name"'", "state": "'"$state"'", "uptime": "'"${uptime}"'", "ram_used": '"${memused:=0}"', "ram_total": '"${memmax:=null}"', "cpu_used": '"${cpuusedpercent:=0}"', "cpu_total": '"${cpumax:=null}"', "disk_used": '"${diskused:=0}"', "disk_total": '"${diskmax:=null}"', "ports": "'"${ports}"'", "bound_ports": '"$(echo "${boundports}" | jq -Rcn 'inputs')"', "logs": '"$(echo "$output" | jq -Rcn '[inputs]')"' }}'
   echo "$json"
   fi
 else 
@@ -670,7 +674,9 @@ local body=${3}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
   read server_id server_name <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id + " " + .server_name' /etc/xmanage/services/.services)"
-  journalctl --unit="${server_id}_${server_name}" -n ${lines:=50} --no-hostname --no-pager
+  logs=$(journalctl --unit="${server_id}_${server_name}" -n ${lines:=50} --no-hostname --no-pager)
+  "${jsonenabled:=false}" && \
+  echo "$logs" | jq -Rcn '[inputs]' || echo "$logs"
   audit "${server_id}" "${client} has checked server's logs"
 else
 "${jsonenabled:=false}" && \
@@ -931,25 +937,16 @@ function prompt {
 }
 function log {
   case $loc in 
-#  uk_UA) echo -e  "${color}[Журнал]${NC} $@" ;;
-#  ru_RU) echo -e  "${color}[Журнал]${NC} $@" ;;
-#  de_DE) echo -e  "${color}[Info]${NC} $@" ;;
   *|en_US) echo -e  "${color}[Info]${NC} $@" ;;
  esac
 }
 function warn {
    case $loc in 
-#  uk_UA) echo -e  "${yellow}[Увага]${NC} $@" ;;
-#  ru_RU) echo -e  "${yellow}[Внимание]${NC} $@" ;;
-#  de_DE) echo -e  "${yellow}[Achtung]${NC} $@" ;;
   *|en_US) echo -e  "${yellow}[Warning]${NC} $@" ;;
  esac
 }
 function error {
      case $loc in 
-#  uk_UA) echo -e  "${red}[Помилка]${NC} $@" ;;
-#  ru_RU) echo -e  "${red}[Ошибка]${NC} $@" ;;
-#  de_DE) echo -e  "${red}[Fehler]${NC} $@" ;;
   *|en_US) echo -e  "${red}[Error]${NC} $@" >&2; exit ;;
  esac
 }
@@ -1030,7 +1027,13 @@ function handleRequest {
     
     if [[ "$trline" =~ ^([A-Z]+)\ ([^ ]+)\ HTTP ]]; then
       request_method="${BASH_REMATCH[1]}"
-      request_path="${BASH_REMATCH[2]}"
+      read -r -d '' request_path  << EOF
+      ${BASH_REMATCH[2]}
+EOF
+      if [[ "$request_path" =~ \?.*=.* ]]; then
+      eval "$(echo "$request_path" | grep -o '?.*=.*' | sed -e 's/\?//' -e 's/&/\n/' -e 's/=/ /g' -e 's/\\$\\(//g' | awk '{out=$1; $1=""; print out "=" "\x27"$0"\x27" }')"
+      request_path=$(echo "$request_path" | sed 's/?.*//')
+      fi
       echo "[$(date +"%d.%m.%y %H:%M:%S")] $request_method $request_path"
     fi
 
@@ -1610,7 +1613,7 @@ serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatev
 server_id=$(echo "$serv" | jq -r '.server_id')
 server_name=$(echo "$serv" | jq -r '.server_name')
 server_service=$(ls /etc/systemd/system/ | grep -m 1 $server_id )
-output=$(journalctl --unit=${server_service} --no-hostname -n 50 --no-pager)
+output=$(s_logs true "API" "${server_id}")
 out=$(cat <<- EOT
 HTTP/1.1 200\r
 Server: xmanage\r
