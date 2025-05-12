@@ -964,7 +964,7 @@ local jsonenabled=${1}
 local client=${2}
 local body=${3}
 local filename=${4}
-local content=${5}
+local content="${5}"
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
   read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
@@ -973,7 +973,7 @@ if server_exists "${body}"; then
       log "${done_message[${loc}]}"
       audit "${server_id}" "CLI has edited file ${filename}"
   else
-      echo -e "$content" >"/etc/xmanage/volumes/${server_id}/${filename}"
+      echo -e "$content" | sed -e 's/"//' -e '0,/"/s///' -e 's/x22/\"/g' >"/etc/xmanage/volumes/${server_id}/${filename}"
       echo '{ "status": "success", "data": null }'
       audit "${server_id}" "CLI has edited file ${filename}"
   fi
@@ -1079,7 +1079,7 @@ function handleRequest {
   request_method=""
   request_path=""
   content_type=""
-  
+  [ ! -z "$(netstat -ltp 2>/dev/null | grep LISTEN* | grep ${port:=8041})" ] || break
   while IFS= read -r line; do
     line="${line%$'\r'}"
     trline=$(echo "$line" | tr -d '\r\n')
@@ -1149,7 +1149,7 @@ EOF
   
   elif [[ -n "$content_length" ]]; then
     BODY_REGEX='(.*?)=(.*?)'
-    IFS= read -n"$content_length" -t1 body
+    read -r -n"$content_length" -t1 body
   fi
    show_200() {
 [ ! -z "${1}" ] && local json="${1}" || local json='{ "status": "success", "data": null }'
@@ -1322,7 +1322,7 @@ EOT
   echo -e "$out" > /etc/xmanage/api/response
   }
   server_patch() {
-whatever=$(echo "$request_path" | sed 's|/servers/||' | sed 's|/backups||' | sed 's|/restart||' | sed 's|/stop||' | sed 's|/backups||' | sed 's|/.*||g') 
+whatever=$(echo "$request_path" | sed -e 's|/servers/||' -e 's|/backups||' -e 's|/restart||' -e 's|/stop||' -e 's|/backups||' -e 's|/.*||g') 
 serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatever}"'")' /etc/xmanage/services/.services)
 server_id=$(echo "$serv" | jq -r '.server_id')
 server_name=$(echo "$serv" | jq -r '.server_name')
@@ -1331,7 +1331,7 @@ case $(echo $request_path | sed 's|/servers/'"${whatever}"'||') in
 /files*)
   if [ ! -z "$body" ]; then 
     filename=$(echo $request_path | sed 's|/servers/'"${whatever}"'/files/||')
-    output=$(s_file_edit true "API" "$server_id" "$filename" "$body")
+    output=$(s_file_edit true "API" "$server_id" "$filename" "${body//\\\"/x22}")
     out=$(cat <<- EOT
 HTTP/1.1 200\r
 Server: xmanage\r
@@ -1664,7 +1664,7 @@ Server: xmanage\r
 Access-Control-Allow-Origin: *\r
 Content-Type: text/plain\r
 
-$(while read line; do echo "$line\r"; done <<< "$filedata")\r
+$filedata\r
 EOT
 );
 # { "status": "success", "data": ${filedata} }\r
@@ -1923,15 +1923,14 @@ EOF
           error "No SSL private key or SSL certificate file specified"
         else
           log "Starting API on port ${port:=8041} (HTTPS)"
-          exec 3<>/etc/xmanage/api/response
           while true; do
-            cat /etc/xmanage/api/response | exec -a "xmanage-api" ncat -l -p ${port:=8041} --ssl --ssl-key ${sslkey} --ssl-cert ${sslcert} --ssl-verify -w 10s | handleRequest
+            cat /etc/xmanage/api/response | exec -a "xmanage-api" ncat -l -p ${port:=8041} --ssl --ssl-key ${sslkey} --ssl-cert ${sslcert} --ssl-verify -w 1s | handleRequest
           done
         fi
       else
         log "Starting API on port ${port:=8041} (HTTP)"
         while true; do
-          cat /etc/xmanage/api/response | exec -a "xmanage-api" ncat -l -p ${port:=8041} -w 10s | handleRequest 
+          cat /etc/xmanage/api/response | exec -a "xmanage-api" ncat -lp ${port:=8041} -w 1s | handleRequest 
         done
       fi
     ;;
