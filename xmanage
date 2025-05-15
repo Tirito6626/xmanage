@@ -1554,9 +1554,6 @@ EOF
     )
 ;;
 "/files"|"/files/")
-serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatever}"'")' /etc/xmanage/services/.services)
-server_id=$(echo "$serv" | jq -r '.server_id')
-server_name=$(echo "$serv" | jq -r '.server_name')
 output=$(s_file_list "true" "API" "${server_id}" | jq -c)
 out=$(cat <<- EOT
 HTTP/1.1 200\r
@@ -1569,9 +1566,6 @@ EOT
 );
 ;;
 /files/*)
-serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatever}"'")' /etc/xmanage/services/.services)
-server_id=$(echo "$serv" | jq -r '.server_id')
-filename=$(echo $request_path | sed 's|/servers/'"${whatever}"'/files/||')
 output=$(s_file_get true "API" "${server_id}" "$filename")
 # | jq -Rcn '[inputs]')
 out=$(cat <<- EOT
@@ -1585,9 +1579,6 @@ EOT
 );
 ;;
 /backups*)
-serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatever}"'")' /etc/xmanage/services/.services)
-server_id=$(echo "$serv" | jq -r '.server_id')
-server_name=$(echo "$serv" | jq -r '.server_name')
 json=$(tree /etc/xmanage/backups/${server_id} -D -h -J  --noreport | jq -c '.')
 out=$(cat <<- EOT
 HTTP/1.1 200\r
@@ -1600,10 +1591,6 @@ EOT
 );
 ;;
 "/logs"|"/logs/")
-serv=$(jq '.[] | select(.server_id=="'"${whatever}"'", .server_name=="'"${whatever}"'")' /etc/xmanage/services/.services)
-server_id=$(echo "$serv" | jq -r '.server_id')
-server_name=$(echo "$serv" | jq -r '.server_name')
-server_service=$(ls /etc/systemd/system/ | grep -m 1 $server_id )
 output=$(s_logs true "API" "${server_id}")
 out=$(cat <<- EOT
 HTTP/1.1 200\r
