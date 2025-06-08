@@ -66,6 +66,7 @@ sleep 1
 }
 function bar {
 amount=${1}
+amount=${amount:=0}
 amount=$(awk "BEGIN {print int(${amount//\.0}) }")
 withpercent=${2}
   if [[ ${amount:=0} = 0 ]]; then
@@ -1253,14 +1254,16 @@ function audit {
 }
 function audit_get {
   local jsonenabled="$1" 
-  local id="$2"
-  local lines="$3"
+  local client="$2"
+  local id="$3"
+  local lines="$4"
   local output=$(cat "$logsFile" | grep "$id" | tail -n ${lines:=20})
   if "${jsonenabled:=false}"; then
     echo "$output" | awk -F'\\('"$id"'\\)' '{ sub(/\[/,""); sub(/\]/,""); print "{ \"time\": \""$1"\", \"description\":\""$2"\" }," }'
   else 
     echo "$output"
   fi
+  audit "${id}" "${client:=Unknown client} has accessed audit"
 }
 args=""
 for arg in "$@"; do
@@ -1401,7 +1404,7 @@ EOF
     done
   content=$(echo "$content" | base64)
   
-  if [[ -n "$content_length" ]]; then
+  elif [[ -n "$content_length" ]]; then
       BODY_REGEX='(.*?)=(.*?)'
       read -r -n"$content_length" -t1 body
   fi
@@ -2040,7 +2043,8 @@ output=$(s_info true "API" "all")
 
 }
 show_audit() {
-output=$(audit_get true "$server_id")
+whatever=$(echo "$path" | sed -E 's|/audit/||; s|/||g')
+output=$(audit_get true API "$whatever")
 show_200 '{ "status": "success", "data": ['"$output"'] }'
 }
 show_options() {
