@@ -1,6 +1,4 @@
 #!/usr/bin/bash
-#
-#
 # Custom set variables come here
 enableMachineData=true
 verbose=false
@@ -11,47 +9,54 @@ nologs=false
 nocolor=false
 usejson=false
 logsFile="/var/log/xmanage/xmanage.log"
-#nomount=false
+yellow='\033[0;33m'
+cyan='\033[0;36m'
+red='\033[0;31m'
+NC='\033[0m' 
+loc=en_US
 #
 #
 #
 # changelog:
-# Full recode, preparation for translation in future
-# API overhaul
+# Overhaul:
+# - each action is separate function with audit log and JSON support
+# - CLI update: all actions how have cleaner format with short information
+# - new CLI format is: <xmanage> <category> <server_id> <action> <subaction?> <arguments?> <options?>
+# - `xmanage initialize`` is now required on install: it initializes core directory and/or API files
+# - Audit log: each action creates audig log entry with the following format:
+# > [DD/MM/YY H:MIN:SEC UTC] (<server id> or global) <CLI/API> <human readable action>
+# > Example:
+# > [27/07/25 11:27:30 UTC] (global) CLI has created new server
+# - API overhaul with forking support
 # verbose=true/false (api)
 # ultraverbose=true/false (api)
 # fixed authorization keys storage bug
-# xmanage initialize <api/cron?> command
-# /files API route
-# /overview
+# /{server}/files API route with file down/upload support 
+# /overview route
 # Total standardization:
-# all resource values are now returned as int, RAM and disk values are now automatically transformed into MB
+# all resource values are now returned as int (or null), RAM and disk values are now automatically transformed into MB
 # ram_usage, cpu_usage and disk_usage are now split into *_used and *_total for easier parsing
 # NOTE: that doesn't affect core JSON, servers information JSON still uses *_limit to avoid further recoding
-# Example JSON: { "status": "success", "data": { "state": "active", "ram_used": 20, "ram_total": 50, "cpu_used": 0, "cpu_total": 100, "disk_used": 10, "disk_total", 0 } }
+# Example JSON: { "status": "success", "data": { "state": "active", "ram_used": 20, "ram_total": 50, "cpu_used": 0, "cpu_total": 100, "disk_used": 10, "disk_total": 0 } }
 
+# -J|--json option
 # --lines option (logs)
 # --no-ptree, --no-logs (status)
+# --no-mount (create)
 # `api run` now checks if ncat is installed
 # `api logs`, `api status`, `api status-systemd`
 
 # to-do: 
 # livestart
 # overview in CLI
-# user-defined variables
-yellow='\033[0;33m'
-cyan='\033[0;36m'
-red='\033[0;31m'
-NC='\033[0m' 
-loc=en_US
+
 
 shopt -s extglob
-argsall=${@}
-argsall1=${1}
-argsall2=${2}
-argsall3=${3}
-argsall4=${4}
-[ -z "$TERM" ] && TERM=xterm-256color
+argsall="${@}"
+argsall1="${1}"
+argsall2="${2}"
+argsall3="${3}"
+argsall4="${4}"
 declare -r black=$(tput setaf 0 ) red=$(tput setaf 1 ) green=$(tput setaf 2 ) yellow=$(tput setaf 3 ) blue=$(tput setaf 4 ) magenta=$(tput setaf 5 ) cyan=$(tput setaf 38 ) gray=$(tput setaf 241 ) lime_yellow=$(tput setaf 190 ) powder_blue=$(tput setaf 153 ) BRIGHT=$(tput bold ) NC=$(tput sgr0) BLINK=$(tput blink ) REVERSE=$(tput smso ) UNDERLINE=$(tput smul )
 color=$cyan
 declare -r vers="v1.0.0-beta"
@@ -65,7 +70,7 @@ sleep 1
   sleep 0.3  
 }
 function bar {
-amount=${1}
+amount="${1}"
 amount=${amount:=0}
 amount=$(awk "BEGIN {print int(${amount//\.0}) }")
 withpercent=${2}
@@ -100,7 +105,7 @@ function to_mb {
 input=$(echo "${1}" | sed 's/\.0//')
 [ -z "$input" ] && input=$(cat)
 
-local output="0"
+local output=0
 if [[ $input =~ M ]]; then
   output=${input::-1}
   elif [[ $input =~ K ]]; then
@@ -114,7 +119,6 @@ if [[ $input =~ M ]]; then
   fi
   echo $output
 }
-#declare -r preserved_words="status all"
 declare -r absolute_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 function startmessage {
 if "$nocolor"; then
@@ -191,7 +195,7 @@ function translate() {
 #de_DE) [[ $(echo ${fullset_de["${1}"]} ) = "" ]] && echo ${fullset_en["${1}"]} || echo ${fullset_de["${1}"]} ;;
 #en_US) echo ${fullset_en["${1}"]} ;;  
 #esac
-echo ${@}
+echo "${@}"
 }
 
 declare -A searching_server_directory=(
@@ -350,7 +354,7 @@ if ! "${jsonenabled}"; then
   prompt "${cyan}Enter CPU limit${NC} (default is unlimited) (without %):" cpulimit 
   prompt "${cyan}Enter RAM limit ${NC}(M/G/T) (default is unlimited): " ramlimit
   prompt "${cyan}Enter Swap limit ${NC}(M/G/T) (default is 0): " swaplimit
-  prompt "${cyan}Enter Disk limit ${NC}(K/M/G/T) (required): " disklimit 1
+  ! "${no_mount:=false}" && prompt "${cyan}Enter Disk limit ${NC}(K/M/G/T) (required): " disklimit 1
   prompt "${cyan}Enter I/O Priority ${NC}(default is 500): " ioweight
   prompt "${cyan}Enter allowed ports ${NC}(1234 or 1234-1235 for radius) (required): " ports 1
   prompt "${cyan}Enter server startup command${NC} (required): " startup 1
@@ -369,10 +373,13 @@ else
   fi
   missing=""
   [[ "$(echo "$body" | jq '. | has("server_name")')" == "false" ]] && missing+=",server_name" || servername=$(echo "$body" | jq -r '.server_name')
+  if [[ "$servername" =~ create|list ]]; then 
+     ! "${jsonenabled}" && error "$servername is reserved name" || echo '{ "status": "fail", "error": "'"$servername"' is reserved name" }'
+  fi
   [[ "$(echo "$body" | jq '. | has("cpu_limit")')" == "false" ]] && missing+=",cpu_limit" || cpulimit=$(echo "$body" | jq -r '.cpu_limit')
   [[ "$(echo "$body" | jq '. | has("ram_limit")')" == "false" ]] && missing+=",ram_limit" || ramlimit=$(echo "$body" | jq -r '.ram_limit')
   [[ "$(echo "$body" | jq '. | has("swap_limit")')" == "false" ]] && missing+=",swap_limit" || swaplimit=$(echo "$body" | jq -r '.swap_limit')
-  [[ "$(echo "$body" | jq '. | has("disk_limit")')" == "false" ]] && missing+=",disk_limit" || disklimit=$(echo "$body" | jq -r '.disk_limit')
+  ! "${no_mount:=false}" && { [[ "$(echo "$body" | jq '. | has("disk_limit")')" == "false" ]] && missing+=",disk_limit" || disklimit=$(echo "$body" | jq -r '.disk_limit'); }
   [[ "$(echo "$body" | jq '. | has("io_weight")')" == "false" ]] && missing+=",io_weight" || ioweight=$(echo "$body" | jq -r '.io_weight')
   [[ "$(echo "$body" | jq '. | has("ports")')" == "false" ]] && missing+=",ports" || ports=$(echo "$body" | jq -r '.ports')
   [[ "$(echo "$body" | jq '. | has("startup")')" == "false" ]] && missing+=",startup" || startup=$(echo "$body" | jq -r '.startup')
@@ -384,8 +391,8 @@ fi
   ! "$jsonenabled" && log "Started server creation..." 
   local server_id=$(echo $RANDOM | md5sum | head -c 10; echo;)
   local ramlimit=$(to_mb "$ramlimit")
-  local disklimit=$(to_mb "$disklimit")
-  local swaplimit=$(to_mb "$swaplimit")
+   ! "${no_mount:=false}" && local disklimit=$(to_mb "$disklimit")
+  [[ "$swaplimit" ]] && local swaplimit=$(to_mb "$swaplimit")
   local output=$(cat <<- EOF
 [Unit]
 Description=${servername}
@@ -419,11 +426,11 @@ server=$(jq -c '. |= . +
   "cpu_limit": '"${cpulimit:=null}"', 
   "ram_limit": '"${ramlimit:=null}"', 
   "swap_limit": '"${swaplimit:=null}"', 
-  "disk_limit": '"${disklimit}"', 
+  "disk_limit": '"${disklimit:=0}"', 
   "io_weight": '"${ioweight:=500}"', 
   "ports": "'"${ports}"'", 
   "startup": "'"${startup}"'", 
-  "extra_options": [],
+  "extra_options": ['"${no_mount:+\"no-mount\"}"'],
   "created_at": "'"$createdat"'" 
   }
 ]' /etc/xmanage/services/.services)
@@ -433,21 +440,23 @@ echo "$server" > /etc/xmanage/services/.services
   echo -e "${output}" > /etc/xmanage/services/${server_id}_${servername}.service
   ln -s /etc/xmanage/services/${server_id}_${servername}.service /etc/systemd/system/${server_id}_${servername}.service
   systemctl enable ${server_id}_${servername}.service 2>&1 >/dev/null
-  ! "$jsonenabled" && log "Generating disk"
   mkdir /etc/xmanage/{volumes/${server_id},backups/${server_id}}
-  touch /etc/xmanage/volumes/${server_id}.partition
-  truncate -s ${disklimit}MB /etc/xmanage/volumes/${server_id}.partition
-  mke2fs -t ext4 -b 1024 -F /etc/xmanage/volumes/${server_id}.partition >/dev/null  2>&1
-  ! "$jsonenabled" && log "Mounting disk"
-  mount /etc/xmanage/volumes/${server_id}.partition /etc/xmanage/volumes/${server_id}
-  echo "/etc/xmanage/volumes/${server_id}.partition /etc/xmanage/volumes/${server_id} ext4 defaults" >> /etc/fstab
-  rm -r /etc/xmanage/volumes/${server_id}/*
+  if ! "${no_mount:=false}"; then
+    ! "$jsonenabled" && log "Generating disk"
+    touch /etc/xmanage/volumes/${server_id}.partition
+    truncate -s ${disklimit}MB /etc/xmanage/volumes/${server_id}.partition
+    mke2fs -t ext4 -b 1024 -F /etc/xmanage/volumes/${server_id}.partition >/dev/null  2>&1
+    ! "$jsonenabled" && log "Mounting disk"
+    mount /etc/xmanage/volumes/${server_id}.partition /etc/xmanage/volumes/${server_id}
+    echo "/etc/xmanage/volumes/${server_id}.partition /etc/xmanage/volumes/${server_id} ext4 defaults" >> /etc/fstab
+    rm -r /etc/xmanage/volumes/${server_id}/*
+  fi
 if ! "$jsonenabled"; then
   log "Server is created succesfully. Run ${cyan}xmanage server start ${servername}${NC} to start it"
   log "Server ID: $server_id"
   log "Server directory: /etc/xmanage/volumes/${server_id}"
 else
-  echo '{ "status": "success", "data": { "server_id":"'"${server_id}"'", "server_name": "'"${servername}"'", "cpu_limit": '"${cpulimit:=null}"', "ram_limit": '"${ramlimit:=null}"', "swap_limit": '"${swaplimit:=null}"', "disk_limit": '"${disklimit}"', "io_weight": '"${ioweight:=500}"', "ports": "'"${ports}"'", "startup": "'"${startup}"'", "extra_options": [], "created_at": "'"$createdat"'" } }'
+  echo '{ "status": "success", "data": { "server_id":"'"${server_id}"'", "server_name": "'"${servername}"'", "cpu_limit": '"${cpulimit:=null}"', "ram_limit": '"${ramlimit:=null}"', "swap_limit": '"${swaplimit:=null}"', "disk_limit": '"$(${no_mount:=false} && echo 0 || echo "${disklimit:=0}")"', "io_weight": '"${ioweight:=500}"', "ports": "'"${ports}"'", "startup": "'"${startup}"'", "extra_options": [], "created_at": "'"$createdat"'" } }'
 fi
   audit "global" "${client} has created new server"
 }
@@ -477,9 +486,14 @@ case "${body}" in
 ;;
 *)
 if server_exists "$body"; then
-  read server_id server_name <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id + " " + .server_name' /etc/xmanage/services/.services)"
+  server="$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)"
+  for opt in $(echo "$server" | jq -r '.extra_options[]'); do 
+    case $opt in 
+      "no-mount") no_mount=true
+    esac
+  done 
+  read server_id server_name <<< "$(echo "$server" | jq -r '.server_id + " " + .server_name')"
   server_service=$(find /etc/systemd/system/ | grep -v default.target.wants | grep -m 1 "$server_id" | cut -c 21- )
-  disk_systemname=$(df | grep "/etc/xmanage/volumes/${server_id}" | awk '{print $1}')
   [ -z "$accept" ] && prompt "${yellow}[Warning]${NC} Are you sure want to delete this server? [Y/n] " accept
   case ${accept:=N} in 
   y|Y)
@@ -487,15 +501,19 @@ if server_exists "$body"; then
   ! "$jsonenabled" && log "Stopping server"
   systemctl stop ${server_service} 
   ! "$jsonenabled" && log "Cleaning server directory"
-  rm /etc/xmanage/volumes/${server_id}/* 2>&1 >/dev/null
-  ! "$jsonenabled" && log "Unmounting disk"
-  umount /etc/xmanage/volumes/${server_id}
-  sed -i "s|$(grep ${server_id} /etc/fstab)||g" /etc/fstab
-  ! "$jsonenabled" && log "Removing disk"
+  rm /etc/xmanage/volumes/${server_id:=anything}/* &>/dev/null
+  if ! "${no_mount:=false}"; then 
+    disk_systemname=$(df | grep "/etc/xmanage/volumes/${server_id}" | awk '{print $1}')
+    ! "$jsonenabled" && log "Unmounting disk"
+    umount /etc/xmanage/volumes/${server_id}
+    sed -i "s|$(grep ${server_id} /etc/fstab)||g" /etc/fstab
+    ! "$jsonenabled" && log "Removing disk"
+    rm /etc/xmanage/volumes/${server_id}.partition
+  fi
   ! "$jsonenabled" && log "Removing service"
   delete=$(jq 'del(.[] | select(.server_id == "'"${server_id}"'"))' /etc/xmanage/services/.services)
   echo "$delete" > /etc/xmanage/services/.services
-  rm -rf /etc/xmanage/volumes/${server_id} /etc/xmanage/volumes/${server_id}.partition /etc/xmanage/services/${server_service} /etc/systemd/system/${server_service}
+  rm -rf /etc/xmanage/volumes/${server_id} /etc/xmanage/services/${server_service} /etc/systemd/system/${server_service}
   ! "$jsonenabled" && log "${done_message[${loc}]}" || echo '{ "status": "success", "data": null }'
   audit "${server_id}" "${client} has deleted the server"
   ;;
@@ -518,6 +536,11 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
   server="$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)"
   server_id=$(echo "$server" | jq -r '.server_id')
   ports=$(echo "$server" | jq -r '.ports')
+  for opt in $(echo "$server" | jq -r '.extra_options[]'); do 
+    case $opt in 
+      "no-mount") no_mount=true
+    esac
+  done 
   fi 
   [[ "$body" = "api" ]] && server_service="xmanage-api" || server_service=$(find /etc/systemd/system/ | grep -v default.target.wants | grep -m 1 "$server_id" | cut -c 21- )
   systemdstatus=$(systemctl status $server_service)
@@ -534,7 +557,7 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
   dead) state1="Dead" ;;
   *) state1=${state:=Unknown} ;;
   esac
-  if [[ "$body" != "api" ]]; then
+  if [[ "$body" != "api" && "$no_mount" != true ]]; then
     disk=$(df -m | grep '/etc/xmanage/volumes/'"${server_id}"'' )
     diskused=$(echo $disk | awk '{print $3}')
     diskmax=$(echo $disk | awk '{print $2}')
@@ -552,8 +575,8 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
       memused=$(echo "$systemdstatus" | grep 'Memory' | awk '{print $2}' | to_mb)
       memusedpercent=$(echo ${memused} ${memmax} | awk '{print $1/$2 * 100.0}')
       uptime=$(echo "$systemdstatus" | grep -Po ".*; \K(.*)(?= ago)")
-      membar=$(bar $memusedpercent)
-      cpubar=$(bar $cpuusedpercent)
+      membar=$(bar ${memusedpercent:=0})
+      cpubar=$(bar ${cpuusedpercent:=0})
       processtree=$(ps -e -o pid,unit,cmd --forest | grep -v 'session-*' | grep "${server_service}" | sed -e "s/${server_service}//g" -e 's/\\_/└─/g' -e 's/    //g')
       boundports=$(netstat -tlp | grep "$(ps -e -o pid,unit,cmd | grep "${server_service}" | awk '{ print $1 }')" | awk '{ if ($4 ~ /[0-9]\.[0-9]/) { print $4 " (IPv4)" } else { print $4 " (IPv6)" } }' | sed 's/.*://')
   fi
@@ -582,15 +605,20 @@ fi
 }
 
 function s_list {
-# set -x
 local jsonenabled=${1}
 local client=${2}
 local client=${client:=Unknown client}
 local json='{ "status": "success", "data": [] }'
   ou="${color}$(translate "ID Name State CPU RAM Disk I/O Ports")${NC}"
   while read server; do
- read -r server_id server_name  <<<"$(echo "$server" | jq -r '.server_id + " " + .server_name')"
- server_service="${server_id}_${server_name}.service"
+  local pid cpuusedpercent=0 memused=0 memusedpercent=0 state systemstatus
+  read -r server_id server_name  <<<"$(echo "$server" | jq -r '.server_id + " " + .server_name')"
+  for opt in $(echo "$server" | jq -r '.extra_options[]'); do 
+    case $opt in 
+      "no-mount") no_mount=true
+    esac
+  done 
+  server_service="${server_id}_${server_name}.service"
   systemdstatus=$(systemctl status $server_service )
   output=$(journalctl --unit=$server_service -n ${lines:=10} --no-hostname --no-pager)
   [ -z $color ] && color=$cyan
@@ -605,10 +633,12 @@ local json='{ "status": "success", "data": [] }'
   dead) state1="Dead" ;;
   *) state1=${state:=Unknown} ;;
   esac
-  disk=$(df -m | grep '/etc/xmanage/volumes/'"${server_id}"'' )
-  diskused=$(echo $disk | awk '{print $3}')
-  diskmax=$(echo $disk | awk '{print $2}')
-  diskusedpercent=$(echo ${diskused} ${diskmax} | awk '{print $1/$2 * 100.0}' | awk '{print int($0+0.5)}') || diskusedpercent=0
+  if ! "${no_mount:=false}"; then 
+    disk=$(df -m | grep '/etc/xmanage/volumes/'"${server_id}"'' )
+    diskused=$(echo $disk | awk '{print $3}')
+    diskmax=$(echo $disk | awk '{print $2}')
+    diskusedpercent=$(echo ${diskused} ${diskmax} | awk '{print $1/$2 * 100.0}' | awk '{print int($0+0.5)}') || diskusedpercent=0
+  fi
   cpumax="$(echo "$server" | jq -r '.cpu_limit')" 
   memmax=$(echo "$server" | jq -r '.ram_limit') 
   ioweight=$(echo $server | jq -r '.io_weight') 
@@ -648,14 +678,18 @@ case "$3" in
   ;;
 *)
   if server_exists "${body}"; then
-    server=$(jq -rc '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")'  /etc/xmanage/services/.services)
-    inf=$(echo "$server" | jq -r '.server_name + " " + .server_id + " " + (.cpu_limit|tostring) + " " + (.ram_limit|tostring) + " " + (.swap_limit|tostring) + " " + (.disk_limit|tostring) + " " + (.io_weight|tostring) + " " + .ports')
+    local server=$(jq -rc '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")'  /etc/xmanage/services/.services)
+    local inf=$(echo "$server" | jq -r '.server_name + " " + .server_id + " " + (.cpu_limit|tostring) + " " + (.ram_limit|tostring) + " " + (.swap_limit|tostring) + " " + (.disk_limit|tostring) + " " + (.io_weight|tostring) + " " + .ports')
     read server_name server_id cpu_limit ram_limit swap_limit disk_limit io_weight ports <<< "${inf}"
-    startup=$(echo "$server" | jq -r '.startup')
-    created_at=$(echo "$server" | jq -r '.created_at')
+    local startup=$(echo "$server" | jq -r '.startup')
+    local created_at=$(echo "$server" | jq -r '.created_at')
+    local options=''
+    for opt in $(echo "$server" | jq -rc '.extra_options[]'); do 
+      options+="${pretty_options["$opt"]:=$opt}, "
+    done
     l="--------------------------------------------------------------------------"
     if ! "${jsonenabled:=false}"; then
-      echo "$(cat <<- EOT
+    cat <<- EOT | sed -e 's/null%/Unlimited/' -e 's/nullMB/Unlimited/g'
 ${color}${server_name}${NC}
 $(echo "$l" | cut -c -$(($(echo -n "${color}${server_name}${NC}" | wc -c)-16)))
 ${color}Server ID${NC}        $server_id
@@ -665,10 +699,10 @@ ${color}Swap limit${NC}       ${swap_limit}MB
 ${color}Disk limit${NC}       ${disk_limit}MB
 ${color}I/O priority${NC}     $io_weight
 ${color}Allowed ports${NC}    $ports
+${color}Extra options${NC}    ${options::-2}
 ${color}Startup command${NC}  $startup
 ${color}Created at${NC}       $created_at
 EOT
-)" | sed -e 's/null%/Unlimited/' -e 's/nulMB/Unlimited/g'
     else
       echo '{ "status": "success", "data": '"$server"' }'
     fi
@@ -999,7 +1033,6 @@ local body=${3}
 local filename=${4}
 local type=${5}
 local content=${6}
-local encoded=${7}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
   read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
@@ -1013,7 +1046,7 @@ if server_exists "${body}"; then
         log "${done_message[${loc}]}"
         audit "${server_id}" "${client} has created new file ${filename}"
       else 
-        mkdir -p "/etc/xmanage/volumes/${server_id}/${filename}"
+        mkdir -p  "/etc/xmanage/volumes/${server_id}/${filename}"
         log "${done_message[${loc}]}"
         audit "${server_id}" "${client} has created new directory ${filename}" 
       fi
@@ -1024,11 +1057,7 @@ if server_exists "${body}"; then
       exit 
     else 
       if [[ "${type:=file}" = "file" ]]; then
-        if ! "${encoded:=false}"; then 
-          echo -e "$content" >"/etc/xmanage/volumes/${server_id}/${filename}"
-        else 
-           echo "$content" | base64 -d >"/etc/xmanage/volumes/${server_id}/${filename}"
-        fi
+        echo -e "$content" >"/etc/xmanage/volumes/${server_id}/${filename}"
         echo '{ "status": "success", "data": null }'
         audit "${server_id}" "${client} has created new file ${filename}"
       else 
@@ -1112,7 +1141,7 @@ if server_exists "${body}"; then
       exit
     fi
     cd /etc/xmanage/volumes/${server_id}/
-    tar -czvf /etc/xmanage/backups/${server_id}/$(date +'%Y-%m-%dT%H:%M').tar.gz *
+    tar -czvf /etc/xmanage/backups/${server_id}/$(date --iso-8601=minutes).tar.gz *
     log "${done_message[${loc}]}"
     log "$(translate "Backup saved in") /etc/xmanage/backups/${server_id}"
     audit "${server_id}" "${client} has created backup"
@@ -1123,7 +1152,7 @@ if server_exists "${body}"; then
       exit
     fi
     cd /etc/xmanage/volumes/${server_id}/
-    tar -czvf /etc/xmanage/backups/${server_id}/$(date +'%Y-%m-%dT%H:%M').tar.gz * >/dev/null
+    tar -czvf /etc/xmanage/backups/${server_id}/$(date --iso-8601=minutes).tar.gz *
     echo '{ "status": "success", "data": null }'
     audit "${server_id}" "${client} has created backup"
   fi
@@ -1224,12 +1253,13 @@ fi
 }
 
 function prompt {
+  local p1='' p2='' p3=''
    [ ! -z "$1" ] && p1=$1
    [ ! -z "$2" ] && p2=$2
    [ ! -z "${3}" ] && p3=${3}
    read -p "$(echo -e $p1) " $p2
    if [[ "$p3" = "1" ]]; then
-   [[ "$(echo ${!2})" = "" ]] && prompt "$p1" "$p2" "1";
+    [[ "${!2}" = "" ]] && prompt "$p1" "$p2" "1";
    fi
 }
 function log {
@@ -1252,22 +1282,9 @@ function audit {
   [ ! -f "$logsFile" ] && touch "$logsFile"
   echo "[$(date +'%d/%m/%y %H:%M:%S %Z')] (${1}) ${2}" >>"$logsFile"
 }
-function audit_get {
-  local jsonenabled="$1" 
-  local client="$2"
-  local id="$3"
-  local lines="$4"
-  local output=$(cat "$logsFile" | grep "$id" | tail -n ${lines:=20})
-  if "${jsonenabled:=false}"; then
-    echo "$output" | awk -F'\\('"$id"'\\)' '{ sub(/\[/,""); sub(/\]/,""); print "{ \"time\": \""$1"\", \"description\":\""$2"\" }," }'
-  else 
-    echo "$output"
-  fi
-  audit "${id}" "${client:=Unknown client} has accessed audit"
-}
 args=""
 for arg in "$@"; do
-if [[ "$arg" =~ (-[a-Z]|--[a-Z]|--.*=) ]]; then
+if [[ "$arg" =~ (-[A-z]|--[A-z]|--.*=) ]]; then
 case $arg in
 -V|--version)
 echo "Xmanage [${vers}]"
@@ -1284,7 +1301,7 @@ ssl=true
 --port=*)     port="${arg#*=}"    ;;
 -h|--help)    helpmsg             ;;
 --lines=*)    lines="${arg#*=}"   ;;
---no-mount)   nomount=true        ;;
+--no-mount)   no_mount=true       ;;
 -v|--verbose) verbose=true        ;;
 --depth=*)    depth="${arg#*=}"   ;;
 -uv|--ultra-verbose)
@@ -1349,18 +1366,18 @@ EOF
       fi
     fi
 
-     if [[ "$trline" =~ [A|a]uthorization:\ Bearer\ (.*) ]]; then
+     if [[ "$trline" =~ Authorization:\ Bearer\ (.*) ]]; then
       auth="${BASH_REMATCH[1]}"
     fi
-    if [[ "$trline" =~ [O|o]rigin:\ (.*) ]]; then
+    if [[ "$trline" =~ Origin:\ (.*) ]]; then
       origin="${BASH_REMATCH[1]}"
     fi
     
-    if [[ "$trline" =~ [C|c]ontent-[L|l]ength:\ ([0-9]+) ]]; then
+    if [[ "$trline" =~ Content-Length:\ ([0-9]+) ]]; then
       content_length="${BASH_REMATCH[1]}"
     fi
     
-    if [[ "$trline" =~ [C|c]ontent-[T|t]ype:\ (.*) ]]; then
+    if [[ "$trline" =~ Content-Type:\ (.*) ]]; then
       content_type="${BASH_REMATCH[1]}"
       if [[ "$content_type" =~ multipart/form-data.*boundary=(.*) ]]; then
         boundary="--${BASH_REMATCH[1]}"
@@ -1398,15 +1415,14 @@ EOF
           capture_content=true
         elif [[ "$capture_content" == true ]]; then
           content+="$line\n"
-          echo "$line" >> /etc/xmanage/volumes/bd31c43867/binary.data
         fi
       fi
     done
-  content=$(echo "$content" | base64)
+
   
   elif [[ -n "$content_length" ]]; then
-      BODY_REGEX='(.*?)=(.*?)'
-      read -r -n"$content_length" -t1 body
+    BODY_REGEX='(.*?)=(.*?)'
+    read -r -n"$content_length" -t1 body
   fi
    show_200() {
 [ ! -z "${2}" ] && local content_type="${2}" || local content_type='application/json'
@@ -1504,35 +1520,9 @@ response_code=403
 echo -e "$out" 
 #respond "$out"
   }
-servers() {
-if [ ! -z "$bulk_action" ]; then
-    case "$bulk_action" in 
-      get)
-        result='[]'
-        error='[]'
-        code=0
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" } }'; exit; }
-        while read -r line; do
-          out1=$(s_get true "API" "$line")
-          if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-            result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-          else 
-            error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'" ]')
-          fi
-        done < <(echo "$body" | jq -r '.[]')
-        if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-    esac
-else
-    result=$(cat /etc/xmanage/services/.services)
-    show_200 '{ "status": "success", "data": '"${result}"' }'
-fi
+  servers() {
+result=$(cat /etc/xmanage/services/.services)
+show_200 '{ "status": "success", "data": '"${result}"' }'
   }
   overview() {
   serversfile=$(cat /etc/xmanage/services/.services)
@@ -1663,137 +1653,9 @@ esac
   }
 server_post() {
 path="$request_path"
-if [[ "${path}" == \/servers || "${path}" == \/servers\/ ]]; then
-  if [ ! -z "$bulk_action" ]; then
-    case "$bulk_action" in 
-      info)
-        result='[]'
-        error='[]'
-        code=0
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; break; }
-        while read -r line; do
-          out1=$(s_info true "API" "$line")
-          if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-            result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-          else 
-            error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'"]')
-          fi
-        done < <(echo "$body" | jq -r '.[]')
-        if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-      status)
-        result='[]'
-        error='[]'
-        code=0
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; break; }
-        while read -r line; do
-          out1=$(s_status true "API" "$line")
-          if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-            result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-          else 
-            error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'" ]')
-          fi
-        done < <(echo "$body" | jq -r '.[]')
-        if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-      create)
-        result='[]'
-        error='[]'
-        code=0
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; break; }
-        while read -r line; do
-          out1=$(s_create true "API" "$line")
-          if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-            result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-          else 
-            error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'" ]')
-          fi
-        done < <(echo "$body" | jq -r '.[]')
-        if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-      start) 
-        result='[]'
-        error='[]'
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; exit; }
-        while read -r line; do 
-           out1=$(s_start true "API" "$line")
-            if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-              result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-            else 
-              error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'" ]')
-            fi
-        done < <(echo "$json" | jq -r '.[]')
-            if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-      stop) 
-        result='[]'
-        error='[]'
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; exit; }
-        while read -r line; do 
-           out1=$(s_stop true "API" "$line")
-            if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-              result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-            else 
-              error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'" ]')
-            fi
-        done < <(echo "$json" | jq -r '.[]')
-            if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-      restart) 
-        result='[]'
-        error='[]'
-        [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; exit; }
-        while read -r line; do 
-           out1=$(s_restart true "API" "$line")
-            if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-              result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-            else 
-              error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'" ]')
-            fi
-        done < <(echo "$json" | jq -r '.[]')
-            if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "success", "data": '"$result"' }'
-        elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-          show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-        else 
-          show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-        fi
-      ;;
-    esac
-  else
+if [[ "${path}" == \/servers || "${path}" == \/servers ]]; then
     output=$(s_create true "API" "$body")
     show_200 "$output"
-  fi
 else
   whatever=$(echo "$path" | sed -E 's|/servers/||; s|/logs||; s|/status||; s|/files.*||; s|/backups||; s|/||g')
     serv=$(jq '[.[] | select(.server_id=="'"${whatever}"'" or .server_name=="'"${whatever}"'")][0]' /etc/xmanage/services/.services)
@@ -1821,60 +1683,14 @@ else
         show_200 "$output"
         ;;
       /files*)
-      if [ ! -z "$bulk_action" ]; then
-        case "$bulk_action" in 
-          create)
-            result='[]'
-            error='[]'
-            [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; break; }
-            while read -r line; do
-              read -r filename type <<<"$(echo "$line" | jq -r '.filename + " " + .type')"
-              out1=$(s_info true "API" "$line")
-              if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-                result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-              else 
-                error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'"]')
-              fi
-            done < <(echo "$body" | jq -r '.[]')
-            if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-              show_200 '{ "status": "success", "data": '"$result"' }'
-            elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-              show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-            else 
-              show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-            fi
-          ;;
-           delete)
-            result='[]'
-            error='[]'
-            [ -z "$body" ] && { show_200 '{ "status": "fail", "error": "Body missing" }'; break; }
-            while read -r line; do
-              out1=$(s_info true "API" "$line")
-              if [[ "$(echo $out1 | jq -r '.status')" = "success" ]]; then 
-                result=$(echo "$result" | jq '. |= . + [ '"$(echo "$out1" | jq -r '.data')"']')
-              else 
-                error=$(echo "$error" | jq '. |= . + [ "'"$(echo "$out1" | jq -r '.error')"'"]')
-              fi
-            done < <(echo "$body" | jq -r '.[]')
-            if [[ "$error" = '[]' ]] && [[ "$result" != '[]' ]]; then 
-              show_200 '{ "status": "success", "data": '"$result"' }'
-            elif [[ "$error" != '[]' ]] && [[ "$result" != '[]' ]]; then 
-              show_200 '{ "status": "partial-success", "data": '"$result"', "error": '"${error:=\"unknown\"}"' }'
-            else 
-              show_200 '{ "status": "fail", "error": '"${error:=\"unknown\"}"' }'
-            fi
-          ;;
-        esac 
-      else
         [ -z "$filename" ] && filename=$(echo "$request_path" | sed 's|/servers/'"${whatever}"'/files/||')
         if [ ! -z "$body" ]; then
           [ -z "$filename" ] && filename=$(echo "$body" | jq '.filename')
           [ -z "$type" ] && type=$(echo "$body" | jq '.type')
           [ ! -z "$(echo "$body" | jq '.directory')" ] && [ -z "$directory" ] && directory=$(echo "$body" | jq '.directory')
         fi
-        output=$(s_file_create true "API" "${server_id}" "${directory}/${filename}" "$type" "$content" true)
+        output=$(s_file_create true "API" "${server_id}" "${directory}/${filename}" "$type")
          show_200 "$output"
-      fi
         ;;
       *)
         show_404
@@ -1886,7 +1702,7 @@ else
 
 server() {
   path="$path"
-  whatever=$(echo "$path" | sed -E 's|/servers/||; s|/logs||; s|/status||; s|/files.*||; s|/backups.*||; s|/||g')
+  whatever=$(echo "$path" | sed -E 's|/servers/||; s|/logs||; s|/status||; s|/files.*||; s|/backups||; s|/||g')
   serv=$(jq '[.[] | select(.server_id=="'"${whatever}"'" or .server_name=="'"${whatever}"'")][0]' /etc/xmanage/services/.services)
   server_id=$(echo "$serv" | jq -r '.server_id')
   server_name=$(echo "$serv" | jq -r '.server_name')
@@ -1899,13 +1715,8 @@ server() {
      show_200 "$output"
 ;;
 "/files"|"/files/")
-if [ "$file_action" = "upload-link" ]; then 
-  upload_token=$(generate_token "${request_path}" true)
-  show_200 '{ "status": "success", "data": { "upload_token": "'"$upload_token"'" } }'
-else 
-  output=$(s_file_list "true" "API" "${server_id}")
-  show_200 "$output"
-fi
+output=$(s_file_list "true" "API" "${server_id}")
+ show_200 "$output"
 ;;
 /files/*)
 if [ "$file_action" = "download-link" ]; then
@@ -1938,10 +1749,10 @@ EOF
 echo -e "$out"
 cat "/etc/xmanage/volumes/${server_id}/$filename"
 echo -e "\r"
-audit "${server_id}" "API has downloaded $filename"
+audit "${server_id}" "API has accessed $filename (download)"
 response_code=200
   else 
-    show_200 '{ "status": "fail", "error": "File is not found" }'
+    show_200 '{ "status": "failed", "error": "File is not found" }'
   fi
 else
   [ -z "$filename" ] && filename=$(echo "$request_path" | sed 's|/servers/'"${whatever}"'/files/||')
@@ -1961,44 +1772,6 @@ fi
 /backups/|/backups)
 output=$(s_backup_list true "API" "${server_id}")
  show_200 "$output"
-;;
-/backups/*)
-if [ "$file_action" = "download-link" ]; then
-  download_token=$(generate_token "${request_path}" true)
-  show_200 '{ "status": "success", "data": { "download_token": "'"$download_token"'" } }'
-elif [ "$file_action" = "download" ]; then 
- [ -z "$filename" ] && filename=$(echo "$request_path" | sed 's|/servers/'"${whatever}"'/backups/||')
-  if [ ! -z "$body" ]; then
-   [ -z "$filename" ] && filename=$(echo "$body" | jq '.filename')
-  fi
-  if [ -f "/etc/xmanage/backups/${server_id}/${filename}" ]; then 
-   # output=$(s_file_get true "API" "${server_id}" "$filename")
-  read -r content_length < <(if ! stat -c%s "/etc/xmanage/backups/${server_id}/$filename"; then 
-   stat -f%z "/etc/xmanage/backups/${server_id}/${filename}"
-  fi)
-  if command -v file >/dev/null 2>&1; then 
-    content_type=$(file -b --mime-type "/etc/xmanage/backups/${server_id}/${filename}")
-  fi
-out=$(cat <<- EOF
-HTTP/1.1 200\r
-Server: xmanage\r
-Access-Control-Allow-Origin: ${origin:=\*}\r
-Accept: application/json\r
-Content-Type: ${content_type:=application\/octet-stream}\r
-Content-Length: ${content_length:=0}\r
-Content-Disposition: attachment; filename="$(echo "${filename}" | sed 's|^.*/||')"\r
-\r
-EOF
-)
-echo -e "$out"
-cat "/etc/xmanage/backups/${server_id}/$filename"
-echo -e "\r"
-audit "${server_id}" "API has downloaded $filename "
-response_code=200
-  else 
-    show_200 '{ "status": "fail", "error": "Backup is not found" }'
-  fi
-fi
 ;;
 "/logs"|"/logs/")
 output=$(s_logs true "API" "${server_id}")
@@ -2042,11 +1815,6 @@ output=$(s_info true "API" "all")
 #show_200 "$(s_info true API all)"
 
 }
-show_audit() {
-whatever=$(echo "$path" | sed -E 's|/audit/||; s|/||g')
-output=$(audit_get true API "$whatever")
-show_200 '{ "status": "success", "data": ['"$output"'] }'
-}
 show_options() {
   out=$(cat << EOF
 HTTP/1.1 200\r
@@ -2067,8 +1835,7 @@ echo -e "$out"
     OPTIONS) show_options ;;
     GET) 
     case "$path" in
-    /audit*)    show_audit ;;
-    /overview*) overview   ;;
+    /overview*) overview ;;
     /servers|/servers/) servers1 ;;
     /servers-status*)    show_200 "$(s_list true API)" ;;
     /servers/*) server ;;
@@ -2077,7 +1844,7 @@ echo -e "$out"
     ;;
     POST)
     case "$path" in
-    /servers*)   server_post ;;
+    /servers*) server_post ;;
     *)              show_404 ;;
     esac
     ;;
@@ -2105,7 +1872,7 @@ elif [[ "$auth_mode" = "token" && "$token" != "" ]]; then
   token="$(grep ''"$token"'' /etc/xmanage/api/.api)"
   if [ ! -z "$token" ]; then 
     read -r token_route token_hash <<<"$(echo "$token" | base64 -d)"
-    if [[ "$token_route" =~ "$request_path" ]]; then
+    if [[ $token_route =~ $request_path ]]; then
       case "$request_method" in
     OPTIONS) show_options ;;
     GET) 
