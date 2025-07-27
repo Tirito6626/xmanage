@@ -1,4 +1,8 @@
 #!/usr/bin/bash
+#
+# Xmanage: The most bash-based JSON parser
+# Credits: Tirito6626, 2025
+# License: Apache License 2.0
 # Custom set variables come here
 enableMachineData=true
 verbose=false
@@ -14,37 +18,6 @@ cyan='\033[0;36m'
 red='\033[0;31m'
 NC='\033[0m' 
 loc=en_US
-#
-#
-#
-# changelog:
-# Overhaul:
-# - each action is separate function with audit log and JSON support
-# - CLI update: all actions how have cleaner format with short information
-# - new CLI format is: <xmanage> <category> <server_id> <action> <subaction?> <arguments?> <options?>
-# - `xmanage initialize`` is now required on install: it initializes core directory and/or API files
-# - Audit log: each action creates audig log entry with the following format:
-# > [DD/MM/YY H:MIN:SEC UTC] (<server id> or global) <CLI/API> <human readable action>
-# > Example:
-# > [27/07/25 11:27:30 UTC] (global) CLI has created new server
-# - API overhaul with forking support
-# verbose=true/false (api)
-# ultraverbose=true/false (api)
-# fixed authorization keys storage bug
-# /{server}/files API route with file down/upload support 
-# /overview route
-# Total standardization:
-# all resource values are now returned as int (or null), RAM and disk values are now automatically transformed into MB
-# ram_usage, cpu_usage and disk_usage are now split into *_used and *_total for easier parsing
-# NOTE: that doesn't affect core JSON, servers information JSON still uses *_limit to avoid further recoding
-# Example JSON: { "status": "success", "data": { "state": "active", "ram_used": 20, "ram_total": 50, "cpu_used": 0, "cpu_total": 100, "disk_used": 10, "disk_total": 0 } }
-
-# -J|--json option
-# --lines option (logs)
-# --no-ptree, --no-logs (status)
-# --no-mount (create)
-# `api run` now checks if ncat is installed
-# `api logs`, `api status`, `api status-systemd`
 
 # to-do: 
 # livestart
@@ -134,58 +107,78 @@ fi
 }
 
 function helpmsg {
-    echo -e "Usage: ${color}${0}${NC} [COMMAND] [SUBCOMMAND] [ARG] [OPTION] [OPTION] ..."
-echo -e ""
-echo -e "Available commands:"
-echo -e "help                                          Show this message"
-echo -e "doctor                                        Start checking for XManage's health"  
-echo -e "server"
-echo -e "├─ ${color}create${NC}                                      Create a new server on this machine"
-echo -e "├─ ${color}delete${NC}         [ID/name OR all]             Remove the server"
-echo -e "├─ ${color}start${NC}          [ID/name OR all]             Start the server"
-echo -e "├─ ${color}restart${NC}        [ID/name OR all]             Restart the server"
-echo -e "├─ ${color}stop${NC}           [ID/name OR all]             Stop the server"
-echo -e "├─ ${color}status${NC}         [ID/name]                    Show status of server"
-echo -e "├─ ${color}show${NC}           [ID/name]                    Show server's information"
-echo -e "├─ ${color}logs${NC}           [ID/name]                    Show ALL logs of server"
-echo -e "├─ ${color}list${NC}                                        Show list of servers"
-echo -e "├─ ${color}edit${NC}           [ID/name]  [type]            Edit server's resources limit"
-echo -e "├─ ${color}edit-systemd${NC}   [ID/name]                    Edit directly server's systemd setting"
-echo -e "├─ ${color}monitor${NC}        [ID/name]                    Monitor server status"
-echo -e "├─ ${color}move-file${NC}      [ID/name]  [file1] [file2]   Move file(s) into server folder"
-echo -e "├─ ${color}copy-file${NC}      [ID/name]  [file1] [file2]   Copy file(s) into server folder"
-echo -e "├─ ${color}delete-file${NC}    [ID/name]  [file1] [file2]   Delete file(s) from server folder"
-echo -e "├─ ${color}files${NC}          [ID/name]                    Show all files inside server folder"
-echo -e "├─ ${color}create-backup${NC}  [ID/name]                    Create a backup for the server"
-echo -e "├─ ${color}delete-backup${NC}  [ID/name]  [backup]          Delete a backup from server"
-echo -e "├─ ${color}restore-backup${NC} [ID/name]  [backup]          Restore server from the backup"
-echo -e "└─ ${color}backups${NC}        [ID/name]                    Show server's backups"
-echo -e ""
-echo -e "api"
-echo -e "├─ ${color}start${NC}                                      Start or/and intialize API"
-echo -e "├─ ${color}restart${NC}                                    Restart API"
-echo -e "├─ ${color}stop${NC}                                       Stop API"
-echo -e "├─ ${color}edit${NC}                                       Edit API's configuration file"
-echo -e "├─ ${color}status${NC}                                     Show status of API"
-echo -e "└─ key"
-echo -e "   ├─ ${color}generate${NC}                                Generate API key"
-echo -e "   └─ ${color}delete${NC}     [key]                        Delete API key"
-echo -e ""
-echo -e "Available types:"
-echo -e "name, cpulimit, ramlimit, swaplimit, disklimit, ioweight, ports, startup"
-echo -e "Available Options:"
-echo -e "--color=color       Use custom color for all commands instead of ${cyan}cyan${NC}"
-echo -e "                    Supported colors: red, green, yellow, blue, magenta, cyan, gray,"
-echo -e "                    lime_yellow, powder_blue, 1-255 (tput colors)"
-echo -e "--no-color          Don't use any colors"
-echo -e "--port=port         Run API over a custom port, e.g. 3000" 
-echo -e "--ssl               Enable SSL for API"
-echo -e "--ssl-key=file      Specify SSL private key file for API"
-echo -e "--ssl-cert=file     Specify SSL certificate file for API"
-echo -e "--version           Show current version and other information"
-echo -e "--no-restart        Don't restart server during the server restoring"
-echo -e "--no-mount          Don't mount server during creation"
+cat << EOF
+Usage: ${color}${0}${NC} [COMMAND] [SUBCOMMAND] [ARG] [OPTION] [OPTION] ...
 
+Available commands:
+help                                  Show this message
+initialize                            Initialize core directory
+audit                                 Get audit logs
+version                               Show current version and license
+server
+├─ ${color}create${NC}                             Create a new server on this machine
+├─ ${color}list${NC}                               Show list of servers
+└─ [server ID/name]
+    ├─ ${color}delete${NC}                         Remove the server
+    ├─ ${color}start${NC}                          Start the server
+    ├─ ${color}restart${NC}                        Restart the server
+    ├─ ${color}stop${NC}                           Stop the server
+    ├─ ${color}status${NC}                         Show server's status
+    ├─ ${color}show${NC}                           Show server's information
+    ├─ ${color}logs${NC}                           Show server's logs
+    ├─ ${color}edit${NC}                           Edit server's resources limit
+    ├─ ${color}edit-systemd${NC}                   Edit directly server's systemd setting
+    ├─ file
+    │   ├─ ${color}list${NC}                       List files in server directory
+    │   ├─ ${color}move${NC}   [file1] [file2] ... Move file(s) into server folder
+    │   ├─ ${color}copy${NC}   [file1] [file2] ... Copy file(s) into server folder
+    │   ├─ ${color}delete${NC} [file1] ...         Delete file(s)
+    │   ├─ ${color}edit${NC}   [file]              Edit file
+    │   ├─ ${color}create${NC} [file] [content?]   Create file
+    │   ├─ ${color}rename${NC} [file] [new name]   Rename file
+    │   └─ ${color}get${NC}    [file]              Return file's contents
+    └─ backup
+        ├─ ${color}list${NC}                       List backups
+        ├─ ${color}create${NC}                     Create backup
+        ├─ ${color}restore${NC} [backup]           Restore server's files from backup
+        └─ ${color}delete${NC}  [backup]           Delete backup
+api
+├─ ${color}start${NC}                              Start or/and intialize API
+├─ ${color}restart${NC}                            Restart API
+├─ ${color}stop${NC}                               Stop API
+├─ ${color}edit${NC}                               Edit API's configuration file
+├─ ${color}status${NC}                             Show status of API
+└─ key
+    ├─ ${color}generate${NC}                       Generate API key
+    └─ ${color}delete${NC}    [key]                Delete API key
+
+Available Options:
+--color=color       Use custom color for all commands instead of ${cyan}cyan${NC}
+                    Supported colors: red, green, yellow, blue, magenta, cyan, gray,
+                    lime_yellow, powder_blue, 1-255 (tput colors)
+--no-color          Don't use any colors
+-J|--json           JSON mode; Any output is in JSON form, input is parsed as JSON
+--port=port         Run API over a custom port, e.g. 3000 
+--ssl               Enable SSL for API
+--ssl-key=file      Specify SSL private key file for API
+--ssl-cert=file     Specify SSL certificate file for API
+--lines=N           Show last N lines of logs (status, logs, audit)
+--flex              Show off with what you're using
+-V|--version        Same as 'version'
+--no-ptree          Don't show process tree (status)
+--no-restart        Don't restart server during the server restoring
+--no-mount          Don't mount server during creation
+
+Environment variables:
+EDITOR=CMD          Use CMD instead of nano (file edit) 
+EOF
+}
+
+function versionmsg {
+echo "Xmanage [${vers}]"
+echo "Copyright (C) 2024-2025 Tirito6626"
+echo "License can be found on https://xmanage-docs.tirito.de/LICENSE"
+exit
 }
 
 function translate() {
@@ -1286,20 +1279,13 @@ args=""
 for arg in "$@"; do
 if [[ "$arg" =~ (-[A-z]|--[A-z]|--.*=) ]]; then
 case $arg in
--V|--version)
-echo "Xmanage [${vers}]"
-echo "Copyright (C) 2024-2025 Tirito6626"
-echo "License can be found on https://xmanage-docs.tirito.de/LICENSE"
-exit
-;;
---ssl)
-ssl=true
-;;
+-V|--version) versionmsg; exit    ;;
+--ssl)        ssl=true            ;;
 --ssl-cert=*) sslcert="${arg#*=}" ;;
 --ssl-key=*)  sslkey="${arg#*=}"  ;;
 --flex)       flex=true           ;;
 --port=*)     port="${arg#*=}"    ;;
--h|--help)    helpmsg             ;;
+-h|--help)    helpmsg; exit       ;;
 --lines=*)    lines="${arg#*=}"   ;;
 --no-mount)   no_mount=true       ;;
 -v|--verbose) verbose=true        ;;
@@ -1310,7 +1296,7 @@ ssl=true
               NC=''
               cyan=''
               nocolor=true        ;;
---no-restart) norestart           ;;
+--no-restart) norestart=true      ;;
 --no-logs)    nologs=true         ;;
 --no-ptree)   noptree=true        ;;
 -J|--json)    usejson=true        ;;
@@ -1953,14 +1939,14 @@ EOF
       *)
         log "Starting initialization"
         prompt "Do you want to enable API? (can be enabled later) [Y/n]" api 1
-        prompt "Do you want to setup Cronjob? (required for autobackups and monitoring) [Y/n]" cron 1
+      #  prompt "Do you want to setup Cronjob? (required for autobackups and monitoring) [Y/n]" cron 1
         log "Creating core directory"
         mkdir -p /etc/xmanage /etc/xmanage/volumes /etc/xmanage/backups /etc/xmanage/services /var/log/xmanage
         touch /etc/xmanage/services/.services /var/log/xmanage/xmanage.log 
 
-        case "${cron}" in 
-          y|Y) touch /etc/xmanage/cronjob.json ;;
-        esac
+     #   case "${cron}" in 
+     #     y|Y) touch /etc/xmanage/cronjob.json ;;
+     #   esac
 
         case "${api}" in
           y|Y)
@@ -2195,6 +2181,8 @@ server)
 test)
 true
 ;;
+ver|version) versionmsg ;; 
+audit) [[ "$lines" ]] && tail -n "$lines" "$logsFile" || cat "$logsFile" ;;
 *|help)
   case $loc in 
     en_US|*) helpmsg ;;
