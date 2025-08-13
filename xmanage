@@ -32,7 +32,7 @@ argsall3="${3}"
 argsall4="${4}"
 declare -r black=$(tput setaf 0 ) red=$(tput setaf 1 ) green=$(tput setaf 2 ) yellow=$(tput setaf 3 ) blue=$(tput setaf 4 ) magenta=$(tput setaf 5 ) cyan=$(tput setaf 38 ) gray=$(tput setaf 241 ) lime_yellow=$(tput setaf 190 ) powder_blue=$(tput setaf 153 ) BRIGHT=$(tput bold ) NC=$(tput sgr0) BLINK=$(tput blink ) REVERSE=$(tput smso ) UNDERLINE=$(tput smul )
 color=$cyan
-declare -r vers="v1.0.0-beta"
+declare -r vers="v1.0.1"
 function progbar {
 sleep 1
   echo -ne "${@}.   ]${void}\r"
