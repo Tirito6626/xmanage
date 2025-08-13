@@ -580,8 +580,8 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
     echo -e "              [${color}${membar}${NC}]"
     echo -e "${color}CPU${NC}           [${cpuusedpercent:=0}%/${cpumax}]"
     echo -e "              [${color}$cpubar${NC}]"
-    [[ "$body" != "api" ]] && echo -e "${color}Disk${NC}          [${diskused}M/${diskmax}M]"   
-    [[ "$body" != "api" ]] && echo -e "              [${color}${diskbar}${NC}]"   
+    [[ "$body" != "api" && "${no_mount:=false}" == false ]] && echo -e "${color}Disk${NC}          [${diskused}M/${diskmax}M]"   
+    [[ "$body" != "api" && "${no_mount:=false}" == false ]] && echo -e "              [${color}${diskbar}${NC}]"   
     echo -e "Bound ports:\n${boundports/\n/, /}"
     "$noptree" || echo "Process tree:"         
     "$noptree" || echo "${processtree//\.service}"
@@ -867,7 +867,7 @@ local client=${client:=Unknown client}
 if server_exists "${body}"; then
   read server_id server_name <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id + " " + .server_name' /etc/xmanage/services/.services)"
   if ! "${jsonenabled:=false}"; then
-    nano "/etc/systemd/system/${server_id}_${server_name}"
+    nano "/etc/systemd/system/${server_id}_${server_name}.service"
     systemctl daemon-reload
     log "${done_message[${loc}]}"
     audit "${server_id}" "${client} has edited server via systemd service file"
@@ -1760,8 +1760,8 @@ output=$(s_backup_list true "API" "${server_id}")
  show_200 "$output"
 ;;
 "/logs"|"/logs/")
-output=$(s_logs true "API" "${server_id}")
-show_200 $(printf '%s' "${output}")
+output="$(s_logs true "API" "${server_id}")"
+show_200 "$(printf '%s' "${output}")"
 ;;
 *)
 output=$(s_info true API "${server_id}")
@@ -2117,7 +2117,7 @@ server)
           s_status-systemd ${usejson:=false} "CLI" "${argsall2}"
         ;;
         edit-systemd)
-          s_edit-systemd "${jsonenabled:=false}" "CLI" "${argsall3}"
+          s_edit-systemd "${jsonenabled:=false}" "CLI" "${argsall2}"
         ;;
         edit)
           s_edit "${usejson:=false}" "CLI" "${argsall2}" 

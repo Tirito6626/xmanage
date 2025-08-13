@@ -23,4 +23,4 @@ Please visit https://docs.tirito.de/xmanage for more information.
 
 While this project is free, we do not get a single profit from this.
 
-Want to donate? Each dollar helps us to keep XManage alive! - [PayPal](https://www.paypal.com/paypalme/tiritoeasy)
+Want to donate? Each dollar helps us to keep Xmanage alive! - [PayPal](https://www.paypal.com/paypalme/tiritoeasy)
