@@ -178,6 +178,7 @@ Available Options:
 --no-ptree          Don't show process tree (status)
 --no-restart        Don't restart server during the server restoring
 --no-mount          Don't mount server during creation
+--directory         Use custom server directory instead of default
 
 Environment variables:
 EDITOR=CMD          Use CMD instead of nano (file edit) 
