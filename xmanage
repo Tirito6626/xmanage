@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 #
 # Xmanage: The most bash-based JSON parser
-# Credits: Tirito6626, 2025
+# Copyright Tirito6626, 2024-2025
 # License: Apache License 2.0
 # Custom set variables come here
 enableMachineData=true
@@ -32,7 +32,7 @@ argsall3="${3}"
 argsall4="${4}"
 declare -r black=$(tput setaf 0 ) red=$(tput setaf 1 ) green=$(tput setaf 2 ) yellow=$(tput setaf 3 ) blue=$(tput setaf 4 ) magenta=$(tput setaf 5 ) cyan=$(tput setaf 38 ) gray=$(tput setaf 241 ) lime_yellow=$(tput setaf 190 ) powder_blue=$(tput setaf 153 ) BRIGHT=$(tput bold ) NC=$(tput sgr0) BLINK=$(tput blink ) REVERSE=$(tput smso ) UNDERLINE=$(tput smul )
 color=$cyan
-declare -r vers="v1.0.1"
+declare -r vers="v1.1.0"
 function progbar {
 sleep 1
   echo -ne "${@}.   ]${void}\r"
@@ -42,6 +42,16 @@ sleep 1
   echo -ne "${@}... ]${void}"
   sleep 0.3  
 }
+
+function parse_extra {
+  for opt in $1; do 
+    case $opt in 
+      "no-mount") no_mount=true ;;
+      custom-dir:*) no_mount=true; IFS=':' read _ custom_dir <<< "$opt" ;; 
+    esac
+  done
+}
+
 function bar {
 amount="${1}"
 amount=${amount:=0}
@@ -177,7 +187,7 @@ EOF
 function versionmsg {
 echo "Xmanage [${vers}]"
 echo "Copyright (C) 2024-2025 Tirito6626"
-echo "License can be found on https://xmanage-docs.tirito.de/LICENSE"
+echo "License can be found on https://repo.tirito.de/LICENSE"
 exit
 }
 
@@ -335,21 +345,19 @@ case "$3" in
 }
 
 function s_create {
-local jsonenabled=${1}
-jsonenabled=${jsonenabled:=false}
+local jsonenabled=${1:-false}
 local client=${2}
 local body=${3}
 local client=${client:=Unknown client}
 
 if ! "${jsonenabled}"; then
-
   prompt "${cyan}Enter server name${NC} (required):" servername 1   
-  prompt "${cyan}Enter CPU limit${NC} (default is unlimited) (without %):" cpulimit 
-  prompt "${cyan}Enter RAM limit ${NC}(M/G/T) (default is unlimited): " ramlimit
-  prompt "${cyan}Enter Swap limit ${NC}(M/G/T) (default is 0): " swaplimit
+  prompt "${cyan}Enter CPU limit${NC} (unlimited) (without %):" cpulimit 
+  prompt "${cyan}Enter RAM limit ${NC}(M/G/T) (unlimited): " ramlimit
+  prompt "${cyan}Enter Swap limit ${NC}(M/G/T) (0): " swaplimit
   ! "${no_mount:=false}" && prompt "${cyan}Enter Disk limit ${NC}(K/M/G/T) (required): " disklimit 1
-  prompt "${cyan}Enter I/O Priority ${NC}(default is 500): " ioweight
-  prompt "${cyan}Enter allowed ports ${NC}(1234 or 1234-1235 for radius) (required): " ports 1
+  prompt "${cyan}Enter I/O Priority ${NC}(500): " ioweight
+  prompt "${cyan}Enter allowed port(s) ${NC}(e.g. 1234/1234-1235) (disabled): " ports
   prompt "${cyan}Enter server startup command${NC} (required): " startup 1
   if [ ! -d /etc/xmanage/ ]; then
    error "Core directory is missing. Please run '${0} initialize' and try again"
@@ -369,11 +377,7 @@ else
   if [[ "$servername" =~ create|list ]]; then 
      ! "${jsonenabled}" && error "$servername is reserved name" || echo '{ "status": "fail", "error": "'"$servername"' is reserved name" }'
   fi
-  [[ "$(echo "$body" | jq '. | has("cpu_limit")')" == "false" ]] && missing+=",cpu_limit" || cpulimit=$(echo "$body" | jq -r '.cpu_limit')
-  [[ "$(echo "$body" | jq '. | has("ram_limit")')" == "false" ]] && missing+=",ram_limit" || ramlimit=$(echo "$body" | jq -r '.ram_limit')
-  [[ "$(echo "$body" | jq '. | has("swap_limit")')" == "false" ]] && missing+=",swap_limit" || swaplimit=$(echo "$body" | jq -r '.swap_limit')
   ! "${no_mount:=false}" && { [[ "$(echo "$body" | jq '. | has("disk_limit")')" == "false" ]] && missing+=",disk_limit" || disklimit=$(echo "$body" | jq -r '.disk_limit'); }
-  [[ "$(echo "$body" | jq '. | has("io_weight")')" == "false" ]] && missing+=",io_weight" || ioweight=$(echo "$body" | jq -r '.io_weight')
   [[ "$(echo "$body" | jq '. | has("ports")')" == "false" ]] && missing+=",ports" || ports=$(echo "$body" | jq -r '.ports')
   [[ "$(echo "$body" | jq '. | has("startup")')" == "false" ]] && missing+=",startup" || startup=$(echo "$body" | jq -r '.startup')
   if [ ! -z "$missing" ]; then
@@ -383,20 +387,16 @@ else
 fi
   ! "$jsonenabled" && log "Started server creation..." 
   local server_id=$(echo $RANDOM | md5sum | head -c 10; echo;)
-  local ramlimit=$(to_mb "$ramlimit")
+  [[ "$ramlimit" ]] && local ramlimit=$(to_mb "$ramlimit")
    ! "${no_mount:=false}" && local disklimit=$(to_mb "$disklimit")
   [[ "$swaplimit" ]] && local swaplimit=$(to_mb "$swaplimit")
   local output=$(cat <<- EOF
 [Unit]
 Description=${servername}
 [Service]
-ExecStart=${startup}
-SocketBindAllow=${ports}
-IOWeight=${ioweight:=500}
-$([ -z "$ramlimit" ] || echo "MemoryHigh=${ramlimit}M")
-$([ -z "$swaplimit" ] || echo "MemorySwapMax=${swaplimit:=0}M")
-$([ -z "$cpulimit" ] || echo "CPUQuota=${cpulimit:=100}%")
-WorkingDirectory=/etc/xmanage/volumes/${server_id}
+ExecStart=${startup} ${ports:+SocketBindAllow=${ports}$'\n'}
+IOWeight=${ioweight:=500} ${ramlimit:+MemoryHigh=${ramlimit}M$'\n'} ${swaplimit:+MemorySwapMax=${ramlimit}M$'\n'} ${cpulimit:+CPUQuota=${ramlimit}%$'\n'}
+WorkingDirectory=${custom_dir:=/etc/xmanage/volumes/${server_id}}
 PrivateDevices=true
 ProtectControlGroups=true
 ProtectHome=true
@@ -404,13 +404,16 @@ ProtectKernelTunables=true
 ProtectSystem=full
 RestrictSUIDSGID=true
 DynamicUser=true
-ReadWritePaths=/etc/xmanage/volumes/${server_id}
+ReadWritePaths=${custom_dir:=/etc/xmanage/volumes/${server_id}}
 [Install]
 WantedBy=default.target
 EOF
   );
 [[ "$(cat /etc/xmanage/services/.services)" = "" ]] && echo '[]' > /etc/xmanage/services/.services || cp /etc/xmanage/services/.services /tmp/services-backup.json
 local createdat=$(date +%c)
+local customargs=''
+[[ "$no_mount" ]] && customargs+=",\"no-mount\""
+[[ "$custom_dir" ]] && customargs+=",\"custom-dir:$custom_dir\""
 server=$(jq -c '. |= . + 
 [
   {
@@ -423,7 +426,7 @@ server=$(jq -c '. |= . +
   "io_weight": '"${ioweight:=500}"', 
   "ports": "'"${ports}"'", 
   "startup": "'"${startup}"'", 
-  "extra_options": ['"${no_mount:+\"no-mount\"}"'],
+  "extra_options": ['"${customargs#,}"'],
   "created_at": "'"$createdat"'" 
   }
 ]' /etc/xmanage/services/.services)
@@ -432,13 +435,14 @@ echo "$server" > /etc/xmanage/services/.services
   touch /etc/xmanage/services/${server_id}_${servername}.service
   echo -e "${output}" > /etc/xmanage/services/${server_id}_${servername}.service
   ln -s /etc/xmanage/services/${server_id}_${servername}.service /etc/systemd/system/${server_id}_${servername}.service
-  systemctl enable ${server_id}_${servername}.service 2>&1 >/dev/null
-  mkdir /etc/xmanage/{volumes/${server_id},backups/${server_id}}
+  systemctl enable ${server_id}_${servername}.service 2>1 >/dev/null
+  mkdir /etc/xmanage/backups/${server_id}
   if ! "${no_mount:=false}"; then
     ! "$jsonenabled" && log "Generating disk"
+    mkdir /etc/xmanage/volumes/${server_id}
     touch /etc/xmanage/volumes/${server_id}.partition
     truncate -s ${disklimit}MB /etc/xmanage/volumes/${server_id}.partition
-    mke2fs -t ext4 -b 1024 -F /etc/xmanage/volumes/${server_id}.partition >/dev/null  2>&1
+    mke2fs -t ext4 -b 1024 -F /etc/xmanage/volumes/${server_id}.partition >/dev/null  2>1
     ! "$jsonenabled" && log "Mounting disk"
     mount /etc/xmanage/volumes/${server_id}.partition /etc/xmanage/volumes/${server_id}
     echo "/etc/xmanage/volumes/${server_id}.partition /etc/xmanage/volumes/${server_id} ext4 defaults" >> /etc/fstab
@@ -447,7 +451,7 @@ echo "$server" > /etc/xmanage/services/.services
 if ! "$jsonenabled"; then
   log "Server is created succesfully. Run ${cyan}xmanage server start ${servername}${NC} to start it"
   log "Server ID: $server_id"
-  log "Server directory: /etc/xmanage/volumes/${server_id}"
+  log "Server directory: ${custom_dir:=/etc/xmanage/volumes/${server_id}}"
 else
   echo '{ "status": "success", "data": { "server_id":"'"${server_id}"'", "server_name": "'"${servername}"'", "cpu_limit": '"${cpulimit:=null}"', "ram_limit": '"${ramlimit:=null}"', "swap_limit": '"${swaplimit:=null}"', "disk_limit": '"$(${no_mount:=false} && echo 0 || echo "${disklimit:=0}")"', "io_weight": '"${ioweight:=500}"', "ports": "'"${ports}"'", "startup": "'"${startup}"'", "extra_options": [], "created_at": "'"$createdat"'" } }'
 fi
@@ -480,11 +484,7 @@ case "${body}" in
 *)
 if server_exists "$body"; then
   server="$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)"
-  for opt in $(echo "$server" | jq -r '.extra_options[]'); do 
-    case $opt in 
-      "no-mount") no_mount=true
-    esac
-  done 
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   read server_id server_name <<< "$(echo "$server" | jq -r '.server_id + " " + .server_name')"
   server_service=$(find /etc/systemd/system/ | grep -v default.target.wants | grep -m 1 "$server_id" | cut -c 21- )
   [ -z "$accept" ] && prompt "${yellow}[Warning]${NC} Are you sure want to delete this server? [Y/n] " accept
@@ -519,21 +519,13 @@ fi
 esac
 }
 function s_status {
-local jsonenabled=${1}
-jsonenabled=${jsonenabled:=false}
-local client=${2}
-local body=${3}
-local client=${client:=Unknown client}
+local jsonenabled=${1:-false} client=${2} body=${3} client=${client:=Unknown client}
 if [[ "$body" = "api" ]] || server_exists "$body"; then
   if [[ "$body" != "api" ]]; then
   server="$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)"
   server_id=$(echo "$server" | jq -r '.server_id')
   ports=$(echo "$server" | jq -r '.ports')
-  for opt in $(echo "$server" | jq -r '.extra_options[]'); do 
-    case $opt in 
-      "no-mount") no_mount=true
-    esac
-  done 
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   fi 
   [[ "$body" = "api" ]] && server_service="xmanage-api" || server_service=$(find /etc/systemd/system/ | grep -v default.target.wants | grep -m 1 "$server_id" | cut -c 21- )
   systemdstatus=$(systemctl status $server_service)
@@ -552,10 +544,13 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
   esac
   if [[ "$body" != "api" && "$no_mount" != true ]]; then
     disk=$(df -m | grep '/etc/xmanage/volumes/'"${server_id}"'' )
-    diskused=$(echo $disk | awk '{print $3}')
-    diskmax=$(echo $disk | awk '{print $2}')
-    diskusedpercent=$(echo ${diskused} ${diskmax} | awk '{print $1/$2 * 100.0}' | awk '{print int($0+0.5)}') || diskusedpercent=0
+    read _ diskmax diskused <<< "$disk"
+    diskusedpercent=$(echo "${diskused} ${diskmax}" | awk '{print $1/$2 * 100.0}' | awk '{print int($0+0.5)}') || diskusedpercent=0
     diskbar=$(bar $diskusedpercent)
+  elif [[ "$custom_dir" ]]; then
+    if du --help >/dev/null && [ -d "$custom_dir" ]; then 
+      read diskused dir < <(du -sm "$custom_dir")
+    fi
   fi
   membar="${gray}offline             ${NC}"
   cpubar="${gray}offline             ${NC}"
@@ -574,21 +569,20 @@ if [[ "$body" = "api" ]] || server_exists "$body"; then
       boundports=$(netstat -tlp | grep "$(ps -e -o pid,unit,cmd | grep "${server_service}" | awk '{ print $1 }')" | awk '{ if ($4 ~ /[0-9]\.[0-9]/) { print $4 " (IPv4)" } else { print $4 " (IPv6)" } }' | sed 's/.*://')
   fi
   if ! "$jsonenabled"; then  
-    
     echo -e "${color}State${NC}         $state1${NC} (${uptime})"
     echo -e "${color}RAM ${NC}          [${memused:=0}M/${memmax}M]"
     echo -e "              [${color}${membar}${NC}]"
     echo -e "${color}CPU${NC}           [${cpuusedpercent:=0}%/${cpumax}]"
     echo -e "              [${color}$cpubar${NC}]"
-    [[ "$body" != "api" && "${no_mount:=false}" == false ]] && echo -e "${color}Disk${NC}          [${diskused}M/${diskmax}M]"   
-    [[ "$body" != "api" && "${no_mount:=false}" == false ]] && echo -e "              [${color}${diskbar}${NC}]"   
+    [[ "$body" != "api" && "${diskused}" != '' ]] && echo -e "${color}Disk${NC}          [${diskused}M/${diskmax:=0}M] ${custom_dir:+($custom_dir)}"   
+    [[ "$body" != "api" && "${no_mount:=false}" == false ]] && echo -e "              [${color}${diskbar}${NC}]"
     echo -e "Bound ports:\n${boundports/\n/, /}"
     "$noptree" || echo "Process tree:"         
     "$noptree" || echo "${processtree//\.service}"
     "$nologs"  || echo "$output"
   else
   cpumax=${cpumax//%}
-  json='{ "status": "success", "data": { "server_id": "'"$server_id"'", "server_name": "'"$server_name"'", "state": "'"$state"'", "uptime": "'"${uptime}"'", "ram_used": '"${memused:=0}"', "ram_total": '"${memmax:=null}"', "cpu_used": '"${cpuusedpercent:=0}"', "cpu_total": '"${cpumax:=null}"', "disk_used": '"${diskused:=0}"', "disk_total": '"${diskmax:=null}"', "ports": "'"${ports}"'", "bound_ports": '"$(echo "${boundports}" | jq -Rcn 'inputs')"', "logs": '"$(echo "$output" | jq -Rcn '[inputs]')"' }}'
+  json='{ "status": "success", "data": { "server_id": "'"$server_id"'", "server_name": "'"$server_name"'", "state": "'"$state"'", "uptime": "'"${uptime}"'", "ram_used": '"${memused:=0}"', "ram_total": '"${memmax:=null}"', "cpu_used": '"${cpuusedpercent:=0}"', "cpu_total": '"${cpumax:=null}"', "disk_used": '"${diskused:=0}"', "disk_total": '"${diskmax:=null}"', "ports": "'"${ports}"'", "bound_ports": '"$(echo "${boundports}" | jq -Rcn '[inputs]')"', "logs": '"$(echo "$output" | jq -Rcn '[inputs]')"' }}'
   echo "$json"
   fi
 else 
@@ -678,7 +672,9 @@ case "$3" in
     local created_at=$(echo "$server" | jq -r '.created_at')
     local options=''
     for opt in $(echo "$server" | jq -rc '.extra_options[]'); do 
-      options+="${pretty_options["$opt"]:=$opt}, "
+      IFS=':' read key value <<< "$opt"
+      [[ $key == custom-dir ]] && custom_dir="$value"
+      options+="$key${value:+: $value}, "
     done
     l="--------------------------------------------------------------------------"
     if ! "${jsonenabled:=false}"; then
@@ -693,6 +689,7 @@ ${color}Disk limit${NC}       ${disk_limit}MB
 ${color}I/O priority${NC}     $io_weight
 ${color}Allowed ports${NC}    $ports
 ${color}Extra options${NC}    ${options::-2}
+${color}Server directory${NC} ${custom_dir:=/etc/xmanage/volumes/${server_id}}
 ${color}Startup command${NC}  $startup
 ${color}Created at${NC}       $created_at
 EOT
@@ -901,9 +898,12 @@ local client=${2}
 local body=${3}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}/"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   if [ ! -z "$4" ] && [[ -f "$4" || -d "$4" ]]; then
-    cp -r ${@: +4} /etc/xmanage/volumes/${server_id}/
+    cp -r ${@: +4} "$custom_dir"
     "${jsonenabled:=false}" && \
     echo '{ "status": "success", "data": null }' || log "${done_message[${loc}]}"
     audit "${server_id}" "${client} has copied $(echo "${@: +4}" | sed 's/ /,/g') to server"
@@ -923,9 +923,11 @@ local client=${2}
 local body=${3}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')custom_dir="/etc/xmanage/volumes/${server_id}/"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   if [ ! -z "$4" ] && [[ -f "$4" || -d "$4" ]]; then
-    mv ${@: +4} /etc/xmanage/volumes/${server_id}
+    mv ${@: +4} "$custom_dir"
    "${jsonenabled:=false}" && \
     echo '{ "status": "success", "data": null }' || log "${done_message[${loc}]}"
     audit "${server_id}" "${client} has moved $(echo "${@: +4}" | sed 's/ /,/g') to server"
@@ -949,18 +951,21 @@ local fullpath=${file%/*}
 local name=${5}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   if [ -z "$name" ]; then 
     "${jsonenabled:=false}" && \
     echo '{ "status": "fail", "error": "New name missing" }' || error "New name missing"
     exit
   fi   
-  if [ ! -z "/etc/xmanage/volumes/${server_id}/${file}" ] && [[ -f "/etc/xmanage/volumes/${server_id}/${file}" || -d "/etc/xmanage/volumes/${server_id}/${file}" ]]; then
-    if [[ -f "/etc/xmanage/volumes/${server_id}/${fullpath/\//}/${name}" || -d "/etc/xmanage/volumes/${server_id}/${fullpath/\//}/${name}" ]]; then
+  if [ ! -z "$custom_dir/${file}" ] && [[ -f "$custom_dir/${file}" || -d "$custom_dir/${file}" ]]; then
+    if [[ -f "$custom_dir/${fullpath/\//}/${name}" || -d "$custom_dir/${fullpath/\//}/${name}" ]]; then
       "${jsonenabled:=false}" && \
       echo '{ "status": "fail", "error": "New name is already used" }' || error "New name is already used"
     else   
-      mv -n "/etc/xmanage/volumes/${server_id}/${file/\//}" "/etc/xmanage/volumes/${server_id}/${fullpath/\//}/${name}"
+      mv -n "$custom_dir/${file/\//}" "$custom_dir/${fullpath/\//}/${name}"
       "${jsonenabled:=false}" && \
       echo '{ "status": "success", "data": null }' || log "${done_message[${loc}]}"
       audit "${server_id}" "${client} has renamed ${file//${fullpath}}"
@@ -980,12 +985,15 @@ local jsonenabled=${1}
 local client=${2}
 local body=${3}
 local directory=${4}
-[ -z "$depth" ] && local depth=${5:-5}
+[ -z "$depth" ] && local depth=${5:-1}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
    "${jsonenabled:=false}" && \
-  echo '{ "status": "success", "data": '"$(tree -JDh --noreport --du -L ${depth} "/etc/xmanage/volumes/${server_id}/${directory}")"' }' || tree -Dh --noreport --du "/etc/xmanage/volumes/${server_id}/${directory}" -L ${depth}
+  echo '{ "status": "success", "data": '"$(tree -JDh --noreport --du -L ${depth} "$custom_dir/${directory}")"' }' || tree -Dh --noreport --du "$custom_dir/${directory}" -L ${depth}
   audit "${server_id}" "${client} has accessed server's files"
 else
 "${jsonenabled:=false}" && \
@@ -999,11 +1007,14 @@ local client=${2}
 local body=${3}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
     for file in ${@: +4}
     do
-      if [ -f "/etc/xmanage/volumes/${server_id}/${file}" ] || [ -d "/etc/xmanage/volumes/${server_id}/${file}" ]; then  
-        rm -rf /etc/xmanage/volumes/${server_id}/${file}
+      if [ -f "$custom_dir/${file}" ] || [ -d "$custom_dir/${file}" ]; then  
+        rm -rf "$custom_dir/${file}"
       else
         "${jsonenabled:=false}" && \
         echo '{ "status": "fail", "error": "File is not found" }' || error "File/directory is not found"
@@ -1028,33 +1039,36 @@ local type=${5}
 local content=${6}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   if ! "${jsonenabled:=false}"; then
-    if [[ -f "/etc/xmanage/volumes/${server_id}/${filename}" || -d "/etc/xmanage/volumes/${server_id}/${filename}" ]]; then 
+    if [[ -f "$custom_dir/${filename}" || -d "$custom_dir/${filename}" ]]; then 
       error "File name is already used"
       exit 
     else 
       if [[ "${type:=file}" = "file" ]]; then
-        [ -z "$(which nano)" ] && touch "/etc/xmanage/volumes/${server_id}/${filename}" || nano "/etc/xmanage/volumes/${server_id}/${filename}"
+        [ -z "$(which nano)" ] && touch "$custom_dir/${filename}" || nano "$custom_dir/${filename}"
         log "${done_message[${loc}]}"
         audit "${server_id}" "${client} has created new file ${filename}"
       else 
-        mkdir -p  "/etc/xmanage/volumes/${server_id}/${filename}"
+        mkdir -p  "$custom_dir/${filename}"
         log "${done_message[${loc}]}"
         audit "${server_id}" "${client} has created new directory ${filename}" 
       fi
     fi
   else
-    if [[ -f "/etc/xmanage/volumes/${server_id}/${filename}" || -d "/etc/xmanage/volumes/${server_id}/${filename}" ]]; then 
+    if [[ -f "$custom_dir/${filename}"|| -d "$custom_dir/${filename}" ]]; then 
       echo '{ "status": "failed", "error": "File name is already used" }'
       exit 
     else 
       if [[ "${type:=file}" = "file" ]]; then
-        echo -e "$content" >"/etc/xmanage/volumes/${server_id}/${filename}"
+        echo -e "$content" > "$custom_dir/${filename}"
         echo '{ "status": "success", "data": null }'
         audit "${server_id}" "${client} has created new file ${filename}"
       else 
-        mkdir -p  "/etc/xmanage/volumes/${server_id}/${filename}"
+        mkdir -p "$custom_dir/${filename}"
         echo '{ "status": "success", "data": null }'
         audit "${server_id}" "${client} has created new directory ${filename}" 
       fi
@@ -1074,14 +1088,17 @@ local filename=${4}
 local content="${5}"
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
   if ! "${jsonenabled:=false}"; then
-      [ ! -z "${EDITOR}" ] && ${EDITOR} "/etc/xmanage/volumes/${server_id}/${filename}" || nano "/etc/xmanage/volumes/${server_id}/${filename}"
+      [ ! -z "${EDITOR}" ] && ${EDITOR} "$custom_dir/${filename}" || nano  "$custom_dir/${filename}"
       log "${done_message[${loc}]}"
       audit "${server_id}" "${client} has edited file ${filename}"
   else
     if [ ! -z "$content" ]; then 
-      echo -e "$content" | sed -e 's/"//' -e '0,/"/s///' -e 's/x22/\"/g' >"/etc/xmanage/volumes/${server_id}/${filename}"
+      echo -e "$content" | sed -e 's/"//' -e '0,/"/s///' -e 's/x22/\"/g' >  "$custom_dir/${filename}"
       echo '{ "status": "success", "data": null }'
       audit "${server_id}" "${client} has edited file ${filename}"
     else 
@@ -1101,11 +1118,14 @@ local body=${3}
 local filename=${4}
 local client=${client:=Unknown client}  
 if server_exists "${body}"; then
-  read server_id <<< "$(jq -r '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'") | .server_id' /etc/xmanage/services/.services)"
-  if [ -f "/etc/xmanage/volumes/${server_id}/${filename}" ]; then
-    cat "/etc/xmanage/volumes/${server_id}/${filename}"
+  server=$(jq '.[] | select(.server_id=="'"${body}"'", .server_name=="'"${body}"'")' /etc/xmanage/services/.services)
+  server_id=$(echo "$server" | jq -r '.server_id')
+  custom_dir="/etc/xmanage/volumes/${server_id}"
+  parse_extra "$(echo "$server" | jq -r '.extra_options[]')"
+  if [ -f "$custom_dir/${filename}" ]; then
+    cat "$custom_dir/${filename}"
     audit "${server_id}" "${client} has accessed ${filename}" 
-  elif [ -d "/etc/xmanage/volumes/${server_id}/${filename}" ]; then
+  elif [ -d "$custom_dir/${filename}" ]; then
     s_file_list true "${client}" "${server_id}" "${filename}"
   else 
     "${jsonenabled:=false}" && \
@@ -1288,6 +1308,14 @@ case $arg in
 -h|--help)    helpmsg; exit       ;;
 --lines=*)    lines="${arg#*=}"   ;;
 --no-mount)   no_mount=true       ;;
+--directory=*)
+  if [ -d "${arg#*=}" ]; then
+    no_mount=true 
+    custom_dir=$(readlink -f "${arg#*=}")
+  else 
+    error "--directory: ${arg#*=} is not a directory"
+    exit 1
+  fi                              ;;
 -v|--verbose) verbose=true        ;;
 --depth=*)    depth="${arg#*=}"   ;;
 -uv|--ultra-verbose)
@@ -2089,7 +2117,7 @@ server)
       s_list "${usejson:=false}" "CLI"
     ;;
     create)
-     s_create ${usejson:=false} "CLI" "${argsall3}"
+     s_create ${usejson:=false} "CLI"
     ;;
     *)
     if server_exists "${argsall2}"; then
