@@ -1564,7 +1564,7 @@ show_200 '{ "status": "success", "data": '"${result}"' }'
   failed) ((failed++)) ;;
   esac
   done
-  distro=$(( lsb_release -ds || cat /etc/*release || uname -om ) 2>&1 >/dev/null | head -n1)
+  distro=$(( lsb_release -ds || cat /etc/*release || uname -om ) 2>/dev/null | head -n1)
   cores=$(nproc)
   while read -r line; do
   ramlimit=$(echo "$line" | jq -r .'ram_limit')
@@ -1581,6 +1581,7 @@ show_200 '{ "status": "success", "data": '"${result}"' }'
 HTTP/1.1 200\r
 Server: xmanage\r
 Content-Type: application/json\r
+Access-Control-Allow-Origin: ${origin:=\*}\r
 Accept: application/json\r
 
 { 
